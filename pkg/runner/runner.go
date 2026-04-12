@@ -156,6 +156,16 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
         var status403Count int64
         var status429Count int64
 
+        // Cross-domain deduplication (multi-target mode only).
+        // If the same wordlist entry produces hits on crossDomainLimit or more
+        // different domains it is almost certainly a shared/global API path rather
+        // than a domain-specific finding.  We show the first crossDomainLimit hits
+        // normally, then suppress the rest and emit a single [GLOBAL] notice.
+        const crossDomainLimit = 10
+        var wordHitCounts sync.Map // map[string]*int64 — hit count per payload word
+        var crossDomainFiltered int64
+        multiTargetMode := len(targets) > 1
+
         ctx := r.conf.Context
         if r.conf.MaxTime > 0 {
                 var cancel context.CancelFunc
@@ -296,6 +306,28 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                                                 }
                                         }
 
+                                        // Cross-domain dedup: in multi-target mode, suppress results
+                                        // for words that have already hit crossDomainLimit domains.
+                                        // On the (limit+1)th hit emit a single [GLOBAL] warning.
+                                        if multiTargetMode {
+                                                word := string(res.Input["FUZZ"])
+                                                val, _ := wordHitCounts.LoadOrStore(word, new(int64))
+                                                counter := val.(*int64)
+                                                n := atomic.AddInt64(counter, 1)
+                                                if n == int64(crossDomainLimit+1) {
+                                                        atomic.AddInt64(&crossDomainFiltered, 1)
+                                                        if !r.conf.Quiet {
+                                                                out.Warning(fmt.Sprintf("[GLOBAL ENDPOINT] /%s — already found on %d domains, suppressing further hits (likely shared API). Use -v to still see them.", word, crossDomainLimit))
+                                                        }
+                                                }
+                                                if n > int64(crossDomainLimit) {
+                                                        if r.conf.Verbose {
+                                                                out.PrintResult(res, fmt.Sprintf("global endpoint: hit on %d+ domains", crossDomainLimit))
+                                                        }
+                                                        continue
+                                                }
+                                        }
+
                                         show, reason := filter.ShouldShow(r.conf, &res)
                                         if show {
                                                 atomic.AddInt64(&foundCount, 1)
@@ -335,11 +367,15 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                 if done > 0 {
                         if float64(cnt403)/float64(done) > 0.50 {
                                 fmt.Fprintf(os.Stderr, "[WARN] %d/%d responses were 403 Forbidden. The server may be blocking fuzzing traffic.\n", cnt403, done)
-                                fmt.Fprintf(os.Stderr, "       Suggestions: reduce threads (-t 5), add delay (-p 1.0), use a real User-Agent (-H 'User-Agent: Mozilla/5.0 ...'), add Authorization header (-H 'Authorization: Bearer TOKEN')\n")
+                                fmt.Fprintf(os.Stderr, "       Suggestions: reduce threads (-t 5), add delay (-p 1.0), add Authorization header (-H 'Authorization: Bearer TOKEN')\n")
                         }
                         if cnt429 > 0 {
                                 fmt.Fprintf(os.Stderr, "[WARN] %d rate-limit (429) responses received. Use -rate 10 or -p 1.0-2.0 to slow down.\n", cnt429)
                         }
+                }
+                suppressed := atomic.LoadInt64(&crossDomainFiltered)
+                if suppressed > 0 {
+                        fmt.Fprintf(os.Stderr, "[INFO] %d global endpoint(s) suppressed (hit on 10+ domains). Run with -v to see all hits.\n", suppressed)
                 }
         }
 
