@@ -40,6 +40,7 @@ type Config struct {
 	StopOn403       bool
 	StopOnAll       bool
 	StopOnErrors    bool
+	Targets         []string
 	Threads         int
 	Timeout         int
 	Url             string
@@ -93,6 +94,7 @@ type InputOptions struct {
 	DirSearchCompat bool
 	Extensions      string
 	IgnoreComments  bool
+	TargetsFile     string
 	Wordlists       []string
 }
 
@@ -185,53 +187,45 @@ func ConfigFromOptions(opts *ConfigOptions, ctx context.Context, cancel context.
 		Wordlists:       opts.Input.Wordlists,
 	}
 
-	if conf.StopOnAll {
-		conf.StopOn403 = true
-		conf.StopOnErrors = true
-	}
-
-	if conf.Method == "GET" && conf.Data != "" {
+	// Auto-set POST when body data is provided and no explicit method given
+	if conf.Data != "" && conf.Method == "GET" {
 		conf.Method = "POST"
 	}
 
+	// Parse headers
 	for _, h := range opts.HTTP.Headers {
 		parts := strings.SplitN(h, ":", 2)
 		if len(parts) == 2 {
 			conf.Headers[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-		} else {
-			return nil, fmt.Errorf("invalid header format: %s", h)
 		}
 	}
 
+	// Parse cookies into a Cookie header
 	if len(opts.HTTP.Cookies) > 0 {
+		existing := conf.Headers["Cookie"]
 		cookieStr := strings.Join(opts.HTTP.Cookies, "; ")
-		if existing, ok := conf.Headers["Cookie"]; ok {
-			conf.Headers["Cookie"] = existing + "; " + cookieStr
-		} else {
-			conf.Headers["Cookie"] = cookieStr
+		if existing != "" {
+			cookieStr = existing + "; " + cookieStr
 		}
+		conf.Headers["Cookie"] = cookieStr
 	}
 
+	// Parse extensions
 	if opts.Input.Extensions != "" {
-		for _, e := range strings.Split(opts.Input.Extensions, ",") {
-			e = strings.TrimSpace(e)
-			if e != "" {
-				if !strings.HasPrefix(e, ".") {
-					e = "." + e
+		for _, ext := range strings.Split(opts.Input.Extensions, ",") {
+			ext = strings.TrimSpace(ext)
+			if ext != "" {
+				if !strings.HasPrefix(ext, ".") {
+					ext = "." + ext
 				}
-				conf.Extensions = append(conf.Extensions, e)
+				conf.Extensions = append(conf.Extensions, ext)
 			}
 		}
 	}
 
-	if len(conf.Wordlists) == 0 {
-		conf.Wordlists = []string{DefaultWordlistURL}
-	}
-
-	if !strings.Contains(conf.Url, "FUZZ") {
-		if conf.Data == "" || !strings.Contains(conf.Data, "FUZZ") {
-			return nil, fmt.Errorf("FUZZ keyword not found in URL (-u) or data (-d). Please use FUZZ as a placeholder")
-		}
+	// Validate: need either -u or -targets
+	if conf.Url == "" && len(conf.Targets) == 0 {
+		return nil, fmt.Errorf("target URL not set — use -u <URL> or -targets <file>")
 	}
 
 	return conf, nil
