@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -15,8 +16,8 @@ import (
 
 type multiStringFlag []string
 
-func (m *multiStringFlag) String() string        { return "" }
-func (m *multiStringFlag) Set(v string) error    { *m = append(*m, v); return nil }
+func (m *multiStringFlag) String() string     { return "" }
+func (m *multiStringFlag) Set(v string) error { *m = append(*m, v); return nil }
 
 type wordlistFlag []string
 
@@ -39,57 +40,58 @@ func ParseFlags(opts *ffuf.ConfigOptions) *ffuf.ConfigOptions {
 	cookies = opts.HTTP.Cookies
 	wordlists = opts.Input.Wordlists
 
-	flag.BoolVar(&opts.General.Colors,         "c",           opts.General.Colors,          "Colorize output")
-	flag.BoolVar(&opts.General.Json,            "json",        opts.General.Json,            "JSON output, print newline-delimited JSON records")
-	flag.BoolVar(&opts.General.Quiet,           "s",           opts.General.Quiet,           "Silent mode. Print only results.")
-	flag.BoolVar(&opts.General.Verbose,         "v",           opts.General.Verbose,         "Verbose output, full URL and redirect location with results")
-	flag.BoolVar(&opts.General.Debug,           "debug",       opts.General.Debug,           "Debug mode: print raw request and response details for every request")
-	flag.BoolVar(&opts.General.ShowVersion,     "V",           opts.General.ShowVersion,     "Show version information")
-	flag.BoolVar(&opts.General.StopOn403,       "sf",          opts.General.StopOn403,       "Stop when > 95% of responses return 403 Forbidden")
-	flag.BoolVar(&opts.General.StopOnErrors,    "se",          opts.General.StopOnErrors,    "Stop on spurious errors")
-	flag.BoolVar(&opts.General.StopOnAll,       "sa",          opts.General.StopOnAll,       "Stop on all error cases. Implies -sf and -se.")
-	flag.BoolVar(&opts.General.AutoCalibration, "ac",          opts.General.AutoCalibration, "Automatically calibrate filtering options")
-	flag.IntVar(&opts.General.MaxTime,          "maxtime",     opts.General.MaxTime,         "Maximum running time in seconds for entire process (0 = unlimited)")
-	flag.IntVar(&opts.General.MaxTimeJob,       "maxtime-job", opts.General.MaxTimeJob,      "Maximum running time in seconds for a single fuzzing job (0 = unlimited)")
-	flag.IntVar(&opts.General.Retries,          "retries",     opts.General.Retries,         "Number of retries for failed/rate-limited requests (default: 0)")
+	flag.BoolVar(&opts.General.Colors, "c", opts.General.Colors, "Colorize output")
+	flag.BoolVar(&opts.General.Json, "json", opts.General.Json, "JSON output, print newline-delimited JSON records")
+	flag.BoolVar(&opts.General.Quiet, "s", opts.General.Quiet, "Silent mode. Print only results.")
+	flag.BoolVar(&opts.General.Verbose, "v", opts.General.Verbose, "Verbose output, full URL and redirect location with results")
+	flag.BoolVar(&opts.General.Debug, "debug", opts.General.Debug, "Debug mode: print raw request and response details for every request")
+	flag.BoolVar(&opts.General.ShowVersion, "V", opts.General.ShowVersion, "Show version information")
+	flag.BoolVar(&opts.General.StopOn403, "sf", opts.General.StopOn403, "Stop when > 95% of responses return 403 Forbidden")
+	flag.BoolVar(&opts.General.StopOnErrors, "se", opts.General.StopOnErrors, "Stop on spurious errors")
+	flag.BoolVar(&opts.General.StopOnAll, "sa", opts.General.StopOnAll, "Stop on all error cases. Implies -sf and -se.")
+	flag.BoolVar(&opts.General.AutoCalibration, "ac", opts.General.AutoCalibration, "Automatically calibrate filtering options")
+	flag.IntVar(&opts.General.MaxTime, "maxtime", opts.General.MaxTime, "Maximum running time in seconds for entire process (0 = unlimited)")
+	flag.IntVar(&opts.General.MaxTimeJob, "maxtime-job", opts.General.MaxTimeJob, "Maximum running time in seconds for a single fuzzing job (0 = unlimited)")
+	flag.IntVar(&opts.General.Retries, "retries", opts.General.Retries, "Number of retries for failed/rate-limited requests (default: 0)")
 
-	flag.StringVar(&opts.HTTP.URL,            "u",           opts.HTTP.URL,           "Target URL")
-	flag.StringVar(&opts.HTTP.Method,         "X",           opts.HTTP.Method,        "HTTP method to use (default: GET, or POST if data is set)")
-	flag.StringVar(&opts.HTTP.Data,           "d",           opts.HTTP.Data,          "POST data")
-	flag.StringVar(&opts.HTTP.ProxyURL,       "x",           opts.HTTP.ProxyURL,      "Proxyurl, ex: http://127.0.0.1:8080")
-	flag.StringVar(&opts.HTTP.ReplayProxyURL, "replay-proxy",opts.HTTP.ReplayProxyURL,"Replay matched requests using this proxy")
-	flag.BoolVar(&opts.HTTP.FollowRedirects,  "r",           opts.HTTP.FollowRedirects,"Follow redirects")
-	flag.BoolVar(&opts.HTTP.IgnoreBody,       "ignore-body", opts.HTTP.IgnoreBody,    "Do not fetch the response content")
-	flag.BoolVar(&opts.HTTP.Raw,              "raw",         opts.HTTP.Raw,           "Do not encode URI")
-	flag.IntVar(&opts.HTTP.Timeout,           "timeout",     opts.HTTP.Timeout,       "HTTP request timeout in seconds")
+	flag.StringVar(&opts.HTTP.URL, "u", opts.HTTP.URL, "Target URL (use FUZZ as the injection point)")
+	flag.StringVar(&opts.HTTP.Method, "X", opts.HTTP.Method, "HTTP method to use (default: GET, or POST if data is set)")
+	flag.StringVar(&opts.HTTP.Data, "d", opts.HTTP.Data, "POST data")
+	flag.StringVar(&opts.HTTP.ProxyURL, "x", opts.HTTP.ProxyURL, "Proxy URL, e.g. http://127.0.0.1:8080")
+	flag.StringVar(&opts.HTTP.ReplayProxyURL, "replay-proxy", opts.HTTP.ReplayProxyURL, "Replay matched requests using this proxy")
+	flag.BoolVar(&opts.HTTP.FollowRedirects, "r", opts.HTTP.FollowRedirects, "Follow redirects")
+	flag.BoolVar(&opts.HTTP.IgnoreBody, "ignore-body", opts.HTTP.IgnoreBody, "Do not fetch the response content")
+	flag.BoolVar(&opts.HTTP.Raw, "raw", opts.HTTP.Raw, "Do not encode URI")
+	flag.IntVar(&opts.HTTP.Timeout, "timeout", opts.HTTP.Timeout, "HTTP request timeout in seconds")
 
-	flag.StringVar(&opts.Input.Extensions,    "e",  opts.Input.Extensions,   "Comma-separated list of extensions to apply (e.g. .php,.html)")
-	flag.BoolVar(&opts.Input.DirSearchCompat, "D",  opts.Input.DirSearchCompat,"DirSearch wordlist compat mode. Used with -e flag.")
-	flag.BoolVar(&opts.Input.IgnoreComments,  "ic", opts.Input.IgnoreComments,"Ignore wordlist comments")
+	flag.StringVar(&opts.Input.Extensions, "e", opts.Input.Extensions, "Comma-separated list of extensions to apply (e.g. .php,.html)")
+	flag.BoolVar(&opts.Input.DirSearchCompat, "D", opts.Input.DirSearchCompat, "DirSearch wordlist compat mode. Used with -e flag.")
+	flag.BoolVar(&opts.Input.IgnoreComments, "ic", opts.Input.IgnoreComments, "Ignore wordlist comments")
+	flag.StringVar(&opts.Input.TargetsFile, "targets", opts.Input.TargetsFile, "File containing multiple target URLs (one per line, each with FUZZ keyword) — fuzzed concurrently")
 
-	flag.StringVar(&opts.Filter.MatchStatus,  "mc", opts.Filter.MatchStatus,  "Match HTTP status codes, or 'all' for everything")
-	flag.StringVar(&opts.Filter.MatchSize,    "ms", opts.Filter.MatchSize,    "Match response size")
-	flag.StringVar(&opts.Filter.MatchWords,   "mw", opts.Filter.MatchWords,   "Match amount of words in response")
-	flag.StringVar(&opts.Filter.MatchLines,   "ml", opts.Filter.MatchLines,   "Match amount of lines in response")
-	flag.StringVar(&opts.Filter.MatchRegexp,  "mr", opts.Filter.MatchRegexp,  "Match regexp")
-	flag.StringVar(&opts.Filter.MatchTime,    "mt", opts.Filter.MatchTime,    "Match how many milliseconds to the first response byte")
-	flag.StringVar(&opts.Filter.FilterStatus, "fc", opts.Filter.FilterStatus,  "Filter HTTP status codes from response")
-	flag.StringVar(&opts.Filter.FilterSize,   "fs", opts.Filter.FilterSize,   "Filter HTTP response size")
-	flag.StringVar(&opts.Filter.FilterWords,  "fw", opts.Filter.FilterWords,  "Filter by amount of words in response")
-	flag.StringVar(&opts.Filter.FilterLines,  "fl", opts.Filter.FilterLines,  "Filter by amount of lines in response")
+	flag.StringVar(&opts.Filter.MatchStatus, "mc", opts.Filter.MatchStatus, "Match HTTP status codes, or 'all' for everything")
+	flag.StringVar(&opts.Filter.MatchSize, "ms", opts.Filter.MatchSize, "Match response size")
+	flag.StringVar(&opts.Filter.MatchWords, "mw", opts.Filter.MatchWords, "Match amount of words in response")
+	flag.StringVar(&opts.Filter.MatchLines, "ml", opts.Filter.MatchLines, "Match amount of lines in response")
+	flag.StringVar(&opts.Filter.MatchRegexp, "mr", opts.Filter.MatchRegexp, "Match regexp")
+	flag.StringVar(&opts.Filter.MatchTime, "mt", opts.Filter.MatchTime, "Match how many milliseconds to the first response byte")
+	flag.StringVar(&opts.Filter.FilterStatus, "fc", opts.Filter.FilterStatus, "Filter HTTP status codes from response")
+	flag.StringVar(&opts.Filter.FilterSize, "fs", opts.Filter.FilterSize, "Filter HTTP response size")
+	flag.StringVar(&opts.Filter.FilterWords, "fw", opts.Filter.FilterWords, "Filter by amount of words in response")
+	flag.StringVar(&opts.Filter.FilterLines, "fl", opts.Filter.FilterLines, "Filter by amount of lines in response")
 	flag.StringVar(&opts.Filter.FilterRegexp, "fr", opts.Filter.FilterRegexp, "Filter regexp")
-	flag.StringVar(&opts.Filter.FilterTime,   "ft", opts.Filter.FilterTime,   "Filter response time in milliseconds")
+	flag.StringVar(&opts.Filter.FilterTime, "ft", opts.Filter.FilterTime, "Filter response time in milliseconds")
 
-	flag.StringVar(&opts.Output.OutputFile,   "o",  opts.Output.OutputFile,   "Write output to file")
-	flag.StringVar(&opts.Output.OutputFormat, "of", opts.Output.OutputFormat,  "Output file format: json, ejson, html, md, csv, ecsv (default: json)")
+	flag.StringVar(&opts.Output.OutputFile, "o", opts.Output.OutputFile, "Write output to file")
+	flag.StringVar(&opts.Output.OutputFormat, "of", opts.Output.OutputFormat, "Output file format: json, csv, md (default: json)")
 
-	flag.IntVar(&opts.General.Threads,  "t",    opts.General.Threads,  "Number of concurrent threads")
-	flag.Int64Var(&opts.General.Rate,   "rate", opts.General.Rate,     "Rate of requests per second (0 = unlimited)")
-	flag.StringVar(&opts.General.Delay, "p",    opts.General.Delay,    "Seconds of delay between requests (e.g. 0.1, or range 0.1-2.0)")
+	flag.IntVar(&opts.General.Threads, "t", opts.General.Threads, "Number of concurrent threads")
+	flag.Int64Var(&opts.General.Rate, "rate", opts.General.Rate, "Rate of requests per second (0 = unlimited)")
+	flag.StringVar(&opts.General.Delay, "p", opts.General.Delay, "Seconds of delay between requests (e.g. 0.1, or range 0.1-2.0)")
 
-	flag.Var(&headers,   "H", "Header, e.g.: 'X-Header: value' (can be specified multiple times)")
-	flag.Var(&cookies,   "b", "Cookie, e.g.: 'Cookie: foo=bar' (can be specified multiple times)")
-	flag.Var(&wordlists, "w", "Wordlist file path or URL (default: built-in wordlist URL)")
+	flag.Var(&headers, "H", "Header, e.g.: 'X-Header: value' (can be specified multiple times)")
+	flag.Var(&cookies, "b", "Cookie, e.g.: 'foo=bar' (can be specified multiple times)")
+	flag.Var(&wordlists, "w", "Wordlist file path or URL (default: built-in wordlist)")
 
 	flag.Parse()
 
@@ -98,6 +100,33 @@ func ParseFlags(opts *ffuf.ConfigOptions) *ffuf.ConfigOptions {
 	opts.Input.Wordlists = wordlists
 
 	return opts
+}
+
+// loadTargetsFile reads a file containing one URL template per line.
+// Lines that are empty or start with # are skipped.
+func loadTargetsFile(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open targets file %q: %w", path, err)
+	}
+	defer f.Close()
+
+	var targets []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		targets = append(targets, line)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading targets file: %w", err)
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("targets file %q is empty", path)
+	}
+	return targets, nil
 }
 
 func main() {
@@ -112,9 +141,10 @@ func main() {
 		os.Exit(0)
 	}
 
-	if opts.HTTP.URL == "" {
+	// Need either -u (single target) or -targets (multi-target file)
+	if opts.HTTP.URL == "" && opts.Input.TargetsFile == "" {
 		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "Required flag not set: -u")
+		fmt.Fprintln(os.Stderr, "Required: -u <URL> or -targets <file>")
 		fmt.Fprintln(os.Stderr, "")
 		flag.Usage()
 		os.Exit(1)
@@ -124,6 +154,27 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERR] %s\n", err)
 		os.Exit(1)
+	}
+
+	// Load multi-target file if provided
+	if opts.Input.TargetsFile != "" {
+		targets, err := loadTargetsFile(opts.Input.TargetsFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[ERR] %s\n", err)
+			os.Exit(1)
+		}
+		conf.Targets = targets
+		// Validate every target has the FUZZ keyword
+		for _, t := range targets {
+			if !strings.Contains(t, "FUZZ") {
+				fmt.Fprintf(os.Stderr, "[ERR] Target URL missing FUZZ keyword: %s\n", t)
+				os.Exit(1)
+			}
+		}
+		// Use the first target as the display URL in the banner
+		if conf.Url == "" {
+			conf.Url = fmt.Sprintf("[%d targets from %s]", len(targets), opts.Input.TargetsFile)
+		}
 	}
 
 	if err := filter.SetupFilters(opts, conf); err != nil {
