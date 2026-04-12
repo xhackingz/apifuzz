@@ -1,23 +1,20 @@
 # apifuzz 🚀
 
-A high-performance, **Smart** API & Web fuzzing tool written in Go. Inspired by the methodology of `ffuf`, but powered by a massive, logic-first wordlist.
+A high-performance, **Smart & Recursive** API & Web fuzzing tool written in Go. Designed to find deep, hidden endpoints that other tools miss.
 
 **Made by xhacking_z**
 **Follow me on X: [x.com/xhacking_z](https://x.com/xhacking_z)**
 
 ## Why apifuzz? 🤔
-Unlike other tools that flood your screen with useless results, `apifuzz` is designed to be **Smart**. It filters out the noise and shows you only what matters, while using a massive 3.6M+ wordlist ordered by logic and importance.
+Standard fuzzers only scratch the surface. `apifuzz` is built for **Deep Discovery**. If it finds a directory, it can automatically dive inside and fuzz it recursively, helping you find vulnerabilities hidden deep within API structures (like `/v1/GuestSession/UUID`).
 
 ## Features ✨
-- **Single Target Mode**: Use `-u` to fuzz a single URL directly.
-- **Sequential Processing**: When using a list (`-s`), it finishes one target completely before moving to the next.
+- **Recursive Fuzzing (-r)**: Automatically fuzzes discovered directories to find deep endpoints.
+- **Recursion Depth Control (-depth)**: Control how deep the tool should go (default: 2).
 - **Smart Filtering**: Shows only `200 OK` by default. No more noise!
-- **Live Spinner & Counter**: Real-time feedback on requests and findings.
-- **Custom Match Codes**: Use `-mc` to specify which status codes you want to see (e.g., `-mc 200,301,401`).
-- **Logic-First Wordlist**: 3.6M+ entries ordered so that high-impact endpoints (api, admin, config, etc.) are tested first.
-- **Fast & Concurrent**: Built with Go's goroutines for maximum speed.
+- **Live Progress Tracking**: Real-time feedback on Percentage, RPS, and Findings.
+- **Logic-First Wordlist**: 3.6M+ entries ordered by impact (api, admin, config, etc. first).
 - **Memory Efficient**: Streams massive wordlists directly from disk.
-- **Easy Installation**: Supports `go install` for quick setup.
 
 ## Installation 🛠️
 
@@ -38,35 +35,36 @@ wget https://raw.githubusercontent.com/xhackingz/apifuzz/master/wordlists/ultima
 
 ## Usage 🚀
 
+### Deep Recursive Fuzzing (Recommended for APIs):
+```bash
+apifuzz -u https://target.com -w ultimate_fuzz_master.txt -r -depth 3 -t 100
+```
+
 ### Single Target:
 ```bash
 apifuzz -u https://example.com -w ultimate_fuzz_master.txt -t 100
 ```
 
-### Multiple Targets (Subdomains List):
+### Multiple Targets:
 ```bash
 apifuzz -s subdomains.txt -w ultimate_fuzz_master.txt -t 100
 ```
 
-### Advanced Usage (Like ffuf):
-Show only 200, 301, and 401 status codes:
-```bash
-apifuzz -s subdomains.txt -w ultimate_fuzz_master.txt -mc 200,301,401 -t 100
-```
-
 ### Options:
-- `-u`: Single target URL (e.g., https://example.com).
-- `-s`: Path to the file containing subdomains (one per line).
+- `-u`: Single target URL.
+- `-s`: Path to the file containing subdomains.
 - `-w`: Path to the wordlist file. **(Required)**
-- `-mc`: Match HTTP status codes, separated by commas (default: **200**).
+- `-r`: Enable recursive fuzzing (fuzz discovered directories).
+- `-depth`: Maximum recursion depth (default: 2).
+- `-mc`: Match HTTP status codes (default: **200**).
 - `-t`: Number of concurrent threads (default: 50).
 - `-timeout`: HTTP timeout in seconds (default: 10).
-- `-h`: Show help menu and usage instructions.
+- `-h`: Show help menu.
 
 ## Methodology 🧠
-1. **Logic First**: We test the most likely endpoints first to get you results faster.
-2. **Noise Reduction**: We hide 403/404 by default so you can focus on valid findings.
-3. **Sequential Focus**: We finish one target completely before moving to the next, making it easier to track results.
+1. **Surface Fuzzing**: Test the main endpoints.
+2. **Deep Dive**: If a directory is found, `apifuzz` enters it and starts a new fuzzing session inside.
+3. **Logic First**: High-impact words are tested first at every level.
 
 ## License 📄
 This project is [MIT](LICENSE) licensed.
