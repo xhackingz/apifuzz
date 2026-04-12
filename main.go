@@ -145,3 +145,4 @@ func readLines(path string) ([]string, error) {
 	}
 	return lines, scanner.Err()
 }
+// Version 1.0.1
