@@ -1,17 +1,20 @@
 # apifuzz 🚀
 
-A high-performance, concurrent API & Web fuzzing tool written in Go, designed for bug bounty hunters and security researchers. Optimized for speed and massive wordlist handling.
+A high-performance, **Smart** API & Web fuzzing tool written in Go. Inspired by the methodology of `ffuf`, but powered by a massive, logic-first wordlist.
 
 **Made by xhacking_z**
 **Follow me on X: [x.com/xhacking_z](https://x.com/xhacking_z)**
 
+## Why apifuzz? 🤔
+Unlike other tools that flood your screen with useless results, `apifuzz` is designed to be **Smart**. It filters out the noise and shows you only what matters, while using a massive 3.6M+ wordlist ordered by logic and importance.
+
 ## Features ✨
-- **Fast & Concurrent**: Built with Go's goroutines for high-speed fuzzing.
-- **Ultimate Wordlist**: Includes a massive master wordlist of over **3.6 million unique entries** aggregated from top-tier sources.
-- **Smart Filtering**: Automatically highlights interesting status codes (200, 401, 403, 301, 302, 500).
-- **Memory Efficient**: Streams wordlists directly from disk to handle millions of entries without high RAM usage.
+- **Smart Filtering**: Shows only `200 OK` by default. No more noise!
+- **Custom Match Codes**: Use `-mc` to specify which status codes you want to see (e.g., `-mc 200,301,401`).
+- **Logic-First Wordlist**: 3.6M+ entries ordered so that high-impact endpoints (api, admin, config, etc.) are tested first.
+- **Fast & Concurrent**: Built with Go's goroutines for maximum speed.
+- **Memory Efficient**: Streams massive wordlists directly from disk.
 - **Easy Installation**: Supports `go install` for quick setup.
-- **Help Menu**: Built-in help menu with `-h` flag.
 
 ## Installation 🛠️
 
@@ -23,18 +26,11 @@ go install github.com/xhackingz/apifuzz@latest
 
 ## Getting the Wordlist 📚
 
-The **Ultimate Fuzz Master** wordlist (3.6M+ entries) is included in this repository. You can get it using one of the following methods:
+The **Ultimate Fuzz Master** wordlist (3.6M+ entries) is included in this repository.
 
-### Method 1: Download directly (Fastest)
+### Download directly:
 ```bash
 wget https://raw.githubusercontent.com/xhackingz/apifuzz/master/wordlists/ultimate_fuzz_master.txt -O ultimate_fuzz_master.txt
-```
-
-### Method 2: Clone the repository
-```bash
-git clone https://github.com/xhackingz/apifuzz.git
-cd apifuzz
-# The wordlist is located in wordlists/ultimate_fuzz_master.txt
 ```
 
 ## Usage 🚀
@@ -43,30 +39,24 @@ cd apifuzz
 apifuzz -s subdomains.txt -w ultimate_fuzz_master.txt -t 100
 ```
 
+### Advanced Usage (Like ffuf):
+Show only 200, 301, and 401 status codes:
+```bash
+apifuzz -s subdomains.txt -w ultimate_fuzz_master.txt -mc 200,301,401 -t 100
+```
+
 ### Options:
 - `-s`: Path to the file containing subdomains (one per line). **(Required)**
 - `-w`: Path to the wordlist file. **(Required)**
+- `-mc`: Match HTTP status codes, separated by commas (default: **200**).
 - `-t`: Number of concurrent threads (default: 50).
 - `-timeout`: HTTP timeout in seconds (default: 10).
 - `-h`: Show help menu and usage instructions.
 
-## Wordlist Sources 📚
-The **Ultimate Fuzz Master** wordlist is a deduplicated aggregation of:
-- **Assetnote** (Automated HTTP Archive Directories & API Routes)
-- **OneListForAll** (Consolidated high-quality list)
-- **SecLists** (Big, Discovery, Web-Content, API)
-- **Bo0oM** (Fuzz.txt)
-- **Param Miner** (Top parameters)
-- **Custom high-impact endpoints** (`/masterdata`, `/info`, `/status`, etc.)
-
 ## Methodology 🧠
-This tool follows the "Ultimate Fuzzing" approach:
-1. **Recon**: Gather all subdomains for your target.
-2. **Fuzz**: Use the massive 3.6M+ master wordlist across all subdomains.
-3. **Analyze**: Focus on 200 OK for data leaks, 401/403 for potential bypasses, or 500 for potential crashes/bugs.
-
-## Contributing 🤝
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/xhackingz/apifuzz/issues).
+1. **Logic First**: We test the most likely endpoints first to get you results faster.
+2. **Noise Reduction**: We hide 403/404 by default so you can focus on valid findings.
+3. **Massive Coverage**: After the common words, we dive into 3.6M+ entries for deep discovery.
 
 ## License 📄
 This project is [MIT](LICENSE) licensed.

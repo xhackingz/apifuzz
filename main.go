@@ -6,13 +6,15 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// apifuzz - High Performance Fuzzing Tool
+// apifuzz - High Performance Smart Fuzzing Tool
 // Made by xhacking_z (https://x.com/xhacking_z)
+// Inspired by ffuf methodology
 
 type Result struct {
 	URL        string
@@ -28,13 +30,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nExample:\n")
-		fmt.Fprintf(os.Stderr, "  apifuzz -s subdomains.txt -w wordlist.txt -t 100 -timeout 5\n")
+		fmt.Fprintf(os.Stderr, "  apifuzz -s subdomains.txt -w wordlist.txt -mc 200,301,401 -t 100\n")
 	}
 
 	subsFile := flag.String("s", "", "File containing subdomains (required)")
 	wordlist := flag.String("w", "", "Wordlist file (required)")
 	threads := flag.Int("t", 50, "Number of concurrent threads")
 	timeout := flag.Int("timeout", 10, "HTTP timeout in seconds")
+	matchCodes := flag.String("mc", "200", "Match HTTP status codes, separated by commas (default: 200)")
 	flag.Parse()
 
 	fmt.Println(`
@@ -53,6 +56,16 @@ func main() {
 		fmt.Println("Error: Missing required arguments.")
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	// Parse match codes
+	mcMap := make(map[int]bool)
+	codes := strings.Split(*matchCodes, ",")
+	for _, c := range codes {
+		code, err := strconv.Atoi(strings.TrimSpace(c))
+		if err == nil {
+			mcMap[code] = true
+		}
 	}
 
 	subdomains, err := readLines(*subsFile)
@@ -82,10 +95,13 @@ func main() {
 				if err != nil {
 					continue
 				}
-				results <- Result{
-					URL:        url,
-					StatusCode: resp.StatusCode,
-					Size:       resp.ContentLength,
+				
+				if mcMap[resp.StatusCode] {
+					results <- Result{
+						URL:        url,
+						StatusCode: resp.StatusCode,
+						Size:       resp.ContentLength,
+					}
 				}
 				resp.Body.Close()
 			}
@@ -95,17 +111,15 @@ func main() {
 	// Result printer
 	go func() {
 		for res := range results {
-			if res.StatusCode == 200 || res.StatusCode == 401 || res.StatusCode == 403 || res.StatusCode == 301 || res.StatusCode == 302 || res.StatusCode == 500 {
-				color := "\033[32m" // Green
-				if res.StatusCode >= 500 {
-					color = "\033[31m" // Red
-				} else if res.StatusCode >= 400 {
-					color = "\033[33m" // Yellow
-				} else if res.StatusCode >= 300 {
-					color = "\033[34m" // Blue
-				}
-				fmt.Printf("%s[%d]\033[0m - Size: %d - %s\n", color, res.StatusCode, res.Size, res.URL)
+			color := "\033[32m" // Green for 200
+			if res.StatusCode >= 500 {
+				color = "\033[31m" // Red for 500
+			} else if res.StatusCode >= 400 {
+				color = "\033[33m" // Yellow for 400s
+			} else if res.StatusCode >= 300 {
+				color = "\033[34m" // Blue for 300s
 			}
+			fmt.Printf("%s[%d]\033[0m - Size: %d - %s\n", color, res.StatusCode, res.Size, res.URL)
 		}
 	}()
 
@@ -158,4 +172,4 @@ func readLines(path string) ([]string, error) {
 	return lines, scanner.Err()
 }
 
-// Version 1.0.2
+// Version 1.1.0
