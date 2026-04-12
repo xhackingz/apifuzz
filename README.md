@@ -11,6 +11,7 @@ Written in Go by **xhacking_z**.
 ## Features
 
 - **Full URL output** — every match prints the complete resolved URL, never truncated
+- **Multi-domain fuzzing** (`-targets`) — fuzz multiple targets simultaneously using a shared thread pool
 - **WAF bypass** — sends realistic browser headers (`Sec-Fetch-*`, `Accept-Encoding`, `Cache-Control`, `Sec-Ch-Ua`) that bot-detection systems expect
 - **Rate-limit handling** — auto-detects 429 / 503 responses and retries with exponential backoff
 - **WAF detection** — warns in real time when >80% of responses are 403, with suggested mitigations
@@ -85,11 +86,82 @@ go build -buildvcs=false -o apifuzz .
 
 ---
 
+## Multi-Domain Fuzzing
+
+Use `-targets` to fuzz multiple API domains at the same time. All targets share a single thread pool — no performance loss, no sequential queuing.
+
+### 1. Create a targets file
+
+Each line is a URL template with `FUZZ` as the injection point. Blank lines and lines starting with `#` are ignored.
+
+```
+# targets.txt
+https://api1.example.com/FUZZ
+https://api2.example.com/FUZZ
+https://api3.example.com/FUZZ
+```
+
+### 2. Run with `-targets`
+
+```bash
+./apifuzz -targets targets.txt -mc 200 -c
+```
+
+That's it. With the default `-t 40`, all three domains are fuzzed concurrently from the very first request.
+
+### How it works
+
+Jobs are interleaved across all targets in round-robin order before being fed into the shared worker pool:
+
+```
+word1 → api1.example.com
+word1 → api2.example.com
+word1 → api3.example.com
+word2 → api1.example.com
+word2 → api2.example.com
+...
+```
+
+This means every domain receives traffic simultaneously — increasing `-t` speeds up all domains equally.
+
+### Examples
+
+```bash
+# Fuzz 3 domains concurrently with 40 threads (default)
+./apifuzz -targets targets.txt -mc 200 -c
+
+# Custom wordlist + higher thread count
+./apifuzz -targets targets.txt -w ./wordlists/ultimate_fuzz_master.txt -t 80 -mc 200 -c
+
+# Add auth header applied to all targets
+./apifuzz -targets targets.txt -t 40 -mc 200 \
+  -H 'Authorization: Bearer YOUR_TOKEN'
+
+# WAF-aware: slow down across all targets uniformly
+./apifuzz -targets targets.txt -t 10 -p 0.5-1.5 -retries 2 -mc 200 -c
+
+# Save all results to a JSON file
+./apifuzz -targets targets.txt -mc 200 -o results.json -of json
+```
+
+### Rules & notes
+
+| | |
+|---|---|
+| `-u` and `-targets` | Mutually exclusive — use one or the other |
+| `FUZZ` keyword | Every line in the targets file **must** contain `FUZZ` — the tool validates this at startup and exits with an error if any line is missing it |
+| Wordlist | Works exactly the same as single-target mode; use `-w` or rely on the built-in list |
+| All other flags | `-mc`, `-fc`, `-ms`, `-H`, `-b`, `-ac`, `-o`, `-debug`, etc. all apply globally to every target |
+| Thread count | `-t 40` with 3 domains = all 3 are fuzzed simultaneously, not 40 ÷ 3 per domain |
+
+---
+
 ## Flags
 
 | Flag | Description |
 |------|-------------|
 | `-u` | Target URL — put `FUZZ` where the payload goes |
+| `-targets` | File containing multiple target URLs (one per line, each must contain `FUZZ`) |
 | `-w` | Wordlist path or URL (uses built-in list if omitted) |
 | `-X` | HTTP method (default: `GET`, auto-`POST` if `-d` is set) |
 | `-d` | POST / PUT body data |
