@@ -9,7 +9,10 @@ A high-performance, **Smart** API & Web fuzzing tool written in Go. Inspired by 
 Unlike other tools that flood your screen with useless results, `apifuzz` is designed to be **Smart**. It filters out the noise and shows you only what matters, while using a massive 3.6M+ wordlist ordered by logic and importance.
 
 ## Features ✨
+- **Single Target Mode**: Use `-u` to fuzz a single URL directly.
+- **Sequential Processing**: When using a list (`-s`), it finishes one target completely before moving to the next.
 - **Smart Filtering**: Shows only `200 OK` by default. No more noise!
+- **Live Spinner & Counter**: Real-time feedback on requests and findings.
 - **Custom Match Codes**: Use `-mc` to specify which status codes you want to see (e.g., `-mc 200,301,401`).
 - **Logic-First Wordlist**: 3.6M+ entries ordered so that high-impact endpoints (api, admin, config, etc.) are tested first.
 - **Fast & Concurrent**: Built with Go's goroutines for maximum speed.
@@ -35,6 +38,12 @@ wget https://raw.githubusercontent.com/xhackingz/apifuzz/master/wordlists/ultima
 
 ## Usage 🚀
 
+### Single Target:
+```bash
+apifuzz -u https://example.com -w ultimate_fuzz_master.txt -t 100
+```
+
+### Multiple Targets (Subdomains List):
 ```bash
 apifuzz -s subdomains.txt -w ultimate_fuzz_master.txt -t 100
 ```
@@ -46,7 +55,8 @@ apifuzz -s subdomains.txt -w ultimate_fuzz_master.txt -mc 200,301,401 -t 100
 ```
 
 ### Options:
-- `-s`: Path to the file containing subdomains (one per line). **(Required)**
+- `-u`: Single target URL (e.g., https://example.com).
+- `-s`: Path to the file containing subdomains (one per line).
 - `-w`: Path to the wordlist file. **(Required)**
 - `-mc`: Match HTTP status codes, separated by commas (default: **200**).
 - `-t`: Number of concurrent threads (default: 50).
@@ -56,7 +66,7 @@ apifuzz -s subdomains.txt -w ultimate_fuzz_master.txt -mc 200,301,401 -t 100
 ## Methodology 🧠
 1. **Logic First**: We test the most likely endpoints first to get you results faster.
 2. **Noise Reduction**: We hide 403/404 by default so you can focus on valid findings.
-3. **Massive Coverage**: After the common words, we dive into 3.6M+ entries for deep discovery.
+3. **Sequential Focus**: We finish one target completely before moving to the next, making it easier to track results.
 
 ## License 📄
 This project is [MIT](LICENSE) licensed.
