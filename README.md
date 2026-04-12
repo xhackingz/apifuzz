@@ -21,10 +21,26 @@ Ensure you have Go installed on your system, then run:
 go install github.com/xhackingz/apifuzz@latest
 ```
 
+## Getting the Wordlist 📚
+
+The **Ultimate Fuzz Master** wordlist (3.6M+ entries) is included in this repository. You can get it using one of the following methods:
+
+### Method 1: Download directly (Fastest)
+```bash
+wget https://raw.githubusercontent.com/xhackingz/apifuzz/master/wordlists/ultimate_fuzz_master.txt -O ultimate_fuzz_master.txt
+```
+
+### Method 2: Clone the repository
+```bash
+git clone https://github.com/xhackingz/apifuzz.git
+cd apifuzz
+# The wordlist is located in wordlists/ultimate_fuzz_master.txt
+```
+
 ## Usage 🚀
 
 ```bash
-apifuzz -s subdomains.txt -w wordlists/ultimate_fuzz_master.txt -t 100
+apifuzz -s subdomains.txt -w ultimate_fuzz_master.txt -t 100
 ```
 
 ### Options:
