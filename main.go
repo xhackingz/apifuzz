@@ -4,23 +4,29 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // apifuzz - High Performance Smart Fuzzing Tool
 // Made by xhacking_z (https://x.com/xhacking_z)
-// Inspired by ffuf methodology
 
 type Result struct {
 	URL        string
 	StatusCode int
 	Size       int64
 }
+
+var (
+	totalRequests uint64
+	foundResults  uint64
+)
 
 func main() {
 	// Custom usage message for -h
@@ -85,43 +91,59 @@ func main() {
 	results := make(chan Result, *threads*2)
 	var wg sync.WaitGroup
 
+	// Live Spinner/Counter
+	go func() {
+		spinner := []string{"|", "/", "-", "\\"}
+		i := 0
+		for {
+			fmt.Printf("\r\033[36m[%s] Requests: %d | Found: %d\033[0m", spinner[i%len(spinner)], atomic.LoadUint64(&totalRequests), atomic.LoadUint64(&foundResults))
+			i++
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+
 	// Start workers
 	for i := 0; i < *threads; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for url := range jobs {
+				atomic.AddUint64(&totalRequests, 1)
 				resp, err := client.Get(url)
 				if err != nil {
 					continue
 				}
 				
 				if mcMap[resp.StatusCode] {
-					results <- Result{
-						URL:        url,
-						StatusCode: resp.StatusCode,
-						Size:       resp.ContentLength,
+					atomic.AddUint64(&foundResults, 1)
+					
+					// Correct Size Calculation
+					var size int64
+					if resp.ContentLength != -1 {
+						size = resp.ContentLength
+					} else {
+						// Read body to get size if Content-Length is missing
+						body, _ := io.ReadAll(resp.Body)
+						size = int64(len(body))
 					}
+
+					// Clear line before printing result to avoid spinner overlap
+					fmt.Print("\r\033[K")
+					
+					color := "\033[32m" // Green for 200
+					if resp.StatusCode >= 500 {
+						color = "\033[31m" // Red for 500
+					} else if resp.StatusCode >= 400 {
+						color = "\033[33m" // Yellow for 400s
+					} else if resp.StatusCode >= 300 {
+						color = "\033[34m" // Blue for 300s
+					}
+					fmt.Printf("%s[%d]\033[0m - Size: %d - %s\n", color, resp.StatusCode, size, url)
 				}
 				resp.Body.Close()
 			}
 		}()
 	}
-
-	// Result printer
-	go func() {
-		for res := range results {
-			color := "\033[32m" // Green for 200
-			if res.StatusCode >= 500 {
-				color = "\033[31m" // Red for 500
-			} else if res.StatusCode >= 400 {
-				color = "\033[33m" // Yellow for 400s
-			} else if res.StatusCode >= 300 {
-				color = "\033[34m" // Blue for 300s
-			}
-			fmt.Printf("%s[%d]\033[0m - Size: %d - %s\n", color, res.StatusCode, res.Size, res.URL)
-		}
-	}()
 
 	// Feed jobs from wordlist file directly to save memory
 	wordlistFile, err := os.Open(*wordlist)
@@ -150,8 +172,7 @@ func main() {
 
 	close(jobs)
 	wg.Wait()
-	close(results)
-	time.Sleep(1 * time.Second)
+	fmt.Printf("\n\033[32m[+] Fuzzing Complete. Total Found: %d\033[0m\n", atomic.LoadUint64(&foundResults))
 }
 
 func readLines(path string) ([]string, error) {
@@ -172,4 +193,4 @@ func readLines(path string) ([]string, error) {
 	return lines, scanner.Err()
 }
 
-// Version 1.1.0
+// Version 1.2.0
