@@ -88,24 +88,18 @@ const defaultWordlistURL = "https://raw.githubusercontent.com/xhackingz/apifuzz/
 func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
         wordlistSources := r.conf.Wordlists
         if len(wordlistSources) == 0 {
-                if !r.conf.Quiet {
-                        out.Info(fmt.Sprintf("No wordlist specified — using built-in list (%s)", defaultWordlistURL))
-                }
                 wordlistSources = []string{defaultWordlistURL}
         }
 
         providers := make([]*input.WordlistProvider, 0, len(wordlistSources))
         for _, wl := range wordlistSources {
-                if !r.conf.Quiet {
-                        out.Info(fmt.Sprintf("Loading wordlist: %s", wl))
-                }
                 p, err := input.NewWordlistProvider(wl, "FUZZ", r.conf.IgnoreComments)
                 if err != nil {
                         return err
                 }
                 providers = append(providers, p)
                 if !r.conf.Quiet {
-                        out.Info(fmt.Sprintf("Loaded %d words", p.Total()))
+                        out.Info(fmt.Sprintf("Loaded %d words from: %s", p.Total(), wl))
                 }
         }
         if len(providers) == 0 {
@@ -132,10 +126,6 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
         targets := []string{r.conf.Url}
         if len(r.conf.Targets) > 0 {
                 targets = r.conf.Targets
-                if !r.conf.Quiet {
-                        out.Info(fmt.Sprintf("Multi-target mode: %d targets × %d words = %d total requests",
-                                len(targets), len(words), len(targets)*len(words)))
-                }
         }
 
         // Auto-calibration: run against the first (or only) target
@@ -146,6 +136,11 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                 if err := r.autoCalibrate(out); err != nil && !r.conf.Quiet {
                         out.Warning(fmt.Sprintf("Auto-calibration warning: %v", err))
                 }
+        }
+
+        // All setup done — print the table header now so results appear cleanly below it.
+        if !r.conf.Quiet && !r.conf.Json {
+                out.PrintTableHeader()
         }
 
         // Total jobs = words × targets (interleaved)
@@ -186,8 +181,9 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
         go func() {
                 ticker := time.NewTicker(100 * time.Millisecond)
                 defer ticker.Stop()
-                var lastWarn403 int64
-                var lastWarn429 int64
+                const warnCooldown = 30 * time.Second
+                var lastWarn403Time time.Time
+                var lastWarn429Time time.Time
                 for {
                         select {
                         case <-progressStop:
@@ -218,17 +214,17 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                                                 cur, total, pct, found, rps, errs, eta)
                                 }
 
-                                // Warn if WAF/rate-limiting is likely
+                                // Warn if WAF/rate-limiting is likely — at most once per 30s to avoid spam
                                 if cur > 50 {
                                         ratio403 := float64(cnt403) / float64(cur)
-                                        if ratio403 > 0.80 && cnt403 != lastWarn403 {
-                                                lastWarn403 = cnt403
-                                                fmt.Fprintf(os.Stderr, "\n\033[33m[WARN] %.0f%% of responses are 403 Forbidden — server may be blocking automated requests (WAF/rate-limit). Try: lower threads (-t 5), add delay (-p 0.5-1.5), use custom headers (-H), or add Authorization token.\033[0m\n", ratio403*100)
+                                        if ratio403 > 0.80 && time.Since(lastWarn403Time) > warnCooldown {
+                                                lastWarn403Time = time.Now()
+                                                fmt.Fprintf(os.Stderr, "\n\033[33m[WARN] %.0f%% of responses are 403 Forbidden — server may be blocking automated requests. Try: -t 5, -p 0.5-1.5, or -H 'Authorization: Bearer TOKEN'\033[0m\n", ratio403*100)
                                         }
                                 }
-                                if cnt429 > 10 && cnt429 != lastWarn429 {
-                                        lastWarn429 = cnt429
-                                        fmt.Fprintf(os.Stderr, "\n\033[33m[WARN] Received %d × 429 Too Many Requests — server is rate-limiting. Consider: -rate 10, -p 1.0-2.0, or -t 5\033[0m\n", cnt429)
+                                if cnt429 > 10 && time.Since(lastWarn429Time) > warnCooldown {
+                                        lastWarn429Time = time.Now()
+                                        fmt.Fprintf(os.Stderr, "\n\033[33m[WARN] Received %d × 429 Too Many Requests — try: -rate 10, -p 1.0-2.0, or -t 5\033[0m\n", cnt429)
                                 }
                         }
                 }
