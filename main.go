@@ -183,6 +183,12 @@ func main() {
                 os.Exit(1)
         }
 
+        // Resolve the default wordlist before printing the banner so it appears
+        // in the config section rather than as an [INFO] message inside the results table.
+        if len(conf.Wordlists) == 0 {
+                conf.Wordlists = []string{ffuf.DefaultWordlistURL}
+        }
+
         out := output.NewStdoutput(conf)
 
         if !conf.Quiet {
