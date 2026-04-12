@@ -92,14 +92,25 @@ Use `-targets` to fuzz multiple API domains at the same time. All targets share 
 
 ### 1. Create a targets file
 
-Each line is a URL template with `FUZZ` as the injection point. Blank lines and lines starting with `#` are ignored.
+List one URL per line. Blank lines and lines starting with `#` are ignored.
+
+**You do not need to add `FUZZ` manually.** If a line doesn't contain `FUZZ`, the tool automatically appends `/FUZZ` to it. Both formats work:
 
 ```
-# targets.txt
-https://api1.example.com/FUZZ
-https://api2.example.com/FUZZ
+# targets.txt — plain base URLs (FUZZ appended automatically)
+https://api1.example.com
+https://api2.example.com
+https://api3.example.com
+```
+
+```
+# targets.txt — explicit FUZZ placement (use this to fuzz a specific path)
+https://api1.example.com/v2/FUZZ
+https://api2.example.com/api/FUZZ
 https://api3.example.com/FUZZ
 ```
+
+You can mix both styles in the same file.
 
 ### 2. Run with `-targets`
 
@@ -149,7 +160,7 @@ This means every domain receives traffic simultaneously — increasing `-t` spee
 | | |
 |---|---|
 | `-u` and `-targets` | Mutually exclusive — use one or the other |
-| `FUZZ` keyword | Every line in the targets file **must** contain `FUZZ` — the tool validates this at startup and exits with an error if any line is missing it |
+| `FUZZ` keyword | Optional — if a line doesn't contain `FUZZ`, the tool automatically appends `/FUZZ` to it |
 | Wordlist | Works exactly the same as single-target mode; use `-w` or rely on the built-in list |
 | All other flags | `-mc`, `-fc`, `-ms`, `-H`, `-b`, `-ac`, `-o`, `-debug`, etc. all apply globally to every target |
 | Thread count | `-t 40` with 3 domains = all 3 are fuzzed simultaneously, not 40 ÷ 3 per domain |
