@@ -1,0 +1,16 @@
+# Binaries
+  apifuzz
+  apifuzz.exe
+  *.test
+
+  # Output
+  /bin/
+  results.*
+  *.json
+  *.csv
+
+  # IDE
+  .vscode/
+  .idea/
+  *.swp
+  
