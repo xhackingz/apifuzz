@@ -1,3 +1,3 @@
-module github.com/MahmoudAyman/apifuzz
+module github.com/xhackingz/apifuzz
 
 go 1.18
