@@ -1,51 +1,56 @@
 # apifuzz 🚀
 
-A high-performance, concurrent API fuzzing tool written in Go, designed for bug bounty hunters and security researchers. Inspired by real-world findings and optimized for speed and efficiency.
+A high-performance, concurrent API & Web fuzzing tool written in Go, designed for bug bounty hunters and security researchers. Optimized for speed and massive wordlist handling.
+
+**Made by xhacking_z**
 
 ## Features ✨
 - **Fast & Concurrent**: Built with Go's goroutines for high-speed fuzzing.
-- **Massive Wordlist**: Includes a master wordlist of over **1 million unique entries** aggregated from top-tier sources.
-- **Smart Filtering**: Automatically highlights interesting status codes (200, 401, 403, 301, 302).
+- **Ultimate Wordlist**: Includes a massive master wordlist of over **3.6 million unique entries** aggregated from top-tier sources.
+- **Smart Filtering**: Automatically highlights interesting status codes (200, 401, 403, 301, 302, 500).
+- **Memory Efficient**: Streams wordlists directly from disk to handle millions of entries without high RAM usage.
 - **Easy Installation**: Supports `go install` for quick setup.
-- **Customizable**: Control threads, timeouts, and more via CLI flags.
 
 ## Installation 🛠️
 
 Ensure you have Go installed on your system, then run:
 
 ```bash
-go install github.com/MahmoudAyman/apifuzz@latest
+go install github.com/xhackingz/apifuzz@latest
 ```
 
 ## Usage 🚀
 
 ```bash
-apifuzz -s subdomains.txt -w wordlists/api_fuzz_master.txt -t 50
+apifuzz -s subdomains.txt -w wordlists/ultimate_fuzz_master.txt -t 100
 ```
 
 ### Flags:
 - `-s`: Path to the file containing subdomains (one per line).
 - `-w`: Path to the wordlist file.
-- `-t`: Number of concurrent threads (default: 20).
+- `-t`: Number of concurrent threads (default: 50).
 - `-timeout`: HTTP timeout in seconds (default: 10).
 
 ## Wordlist Sources 📚
-The master wordlist is a deduplicated aggregation of:
-- [0xPugal/fuzz4bounty](https://github.com/0xPugal/fuzz4bounty)
-- [danielmiessler/SecLists](https://github.com/danielmiessler/SecLists) (API & Raft Medium)
-- Custom high-impact endpoints (`/masterdata`, `/info`, `/status`, etc.)
+The **Ultimate Fuzz Master** wordlist is a deduplicated aggregation of:
+- **Assetnote** (Automated HTTP Archive Directories & API Routes)
+- **OneListForAll** (Consolidated high-quality list)
+- **SecLists** (Big, Discovery, Web-Content, API)
+- **Bo0oM** (Fuzz.txt)
+- **Param Miner** (Top parameters)
+- **Custom high-impact endpoints** (`/masterdata`, `/info`, `/status`, etc.)
 
 ## Methodology 🧠
-This tool follows the "Smart Fuzzing" approach:
+This tool follows the "Ultimate Fuzzing" approach:
 1. **Recon**: Gather all subdomains for your target.
-2. **Fuzz**: Use the massive master wordlist across all subdomains.
-3. **Analyze**: Focus on 200 OK for data leaks, or 401/403 for potential bypasses or hidden endpoints.
+2. **Fuzz**: Use the massive 3.6M+ master wordlist across all subdomains.
+3. **Analyze**: Focus on 200 OK for data leaks, 401/403 for potential bypasses, or 500 for potential crashes/bugs.
 
 ## Contributing 🤝
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/MahmoudAyman/apifuzz/issues).
+Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/xhackingz/apifuzz/issues).
 
 ## License 📄
 This project is [MIT](LICENSE) licensed.
 
 ---
-*Created by Mahmoud Ayman - Happy Hunting!*
+*Created by xhacking_z - Happy Hunting!*
