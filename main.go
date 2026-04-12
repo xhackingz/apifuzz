@@ -12,7 +12,7 @@ import (
 )
 
 // apifuzz - High Performance Fuzzing Tool
-// Made by xhacking_z
+// Made by xhacking_z (https://x.com/xhacking_z)
 
 type Result struct {
 	URL        string
@@ -21,8 +21,18 @@ type Result struct {
 }
 
 func main() {
-	subsFile := flag.String("s", "", "File containing subdomains")
-	wordlist := flag.String("w", "", "Wordlist file")
+	// Custom usage message for -h
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage of apifuzz:\n")
+		fmt.Fprintf(os.Stderr, "  apifuzz -s <subdomains_file> -w <wordlist_file> [options]\n\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		flag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nExample:\n")
+		fmt.Fprintf(os.Stderr, "  apifuzz -s subdomains.txt -w wordlist.txt -t 100 -timeout 5\n")
+	}
+
+	subsFile := flag.String("s", "", "File containing subdomains (required)")
+	wordlist := flag.String("w", "", "Wordlist file (required)")
 	threads := flag.Int("t", 50, "Number of concurrent threads")
 	timeout := flag.Int("timeout", 10, "HTTP timeout in seconds")
 	flag.Parse()
@@ -36,10 +46,12 @@ func main() {
  |_|    |_|    |_|     \____//_____(_)
                                        
     API & Web Fuzzer - Made by xhacking_z
+    Follow me: https://x.com/xhacking_z
 	`)
 
 	if *subsFile == "" || *wordlist == "" {
-		fmt.Println("Usage: apifuzz -s subdomains.txt -w wordlist.txt [-t 50] [-timeout 10]")
+		fmt.Println("Error: Missing required arguments.")
+		flag.Usage()
 		os.Exit(1)
 	}
 
@@ -145,4 +157,5 @@ func readLines(path string) ([]string, error) {
 	}
 	return lines, scanner.Err()
 }
-// Version 1.0.1
+
+// Version 1.0.2

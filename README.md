@@ -3,6 +3,7 @@
 A high-performance, concurrent API & Web fuzzing tool written in Go, designed for bug bounty hunters and security researchers. Optimized for speed and massive wordlist handling.
 
 **Made by xhacking_z**
+**Follow me on X: [x.com/xhacking_z](https://x.com/xhacking_z)**
 
 ## Features ✨
 - **Fast & Concurrent**: Built with Go's goroutines for high-speed fuzzing.
@@ -10,6 +11,7 @@ A high-performance, concurrent API & Web fuzzing tool written in Go, designed fo
 - **Smart Filtering**: Automatically highlights interesting status codes (200, 401, 403, 301, 302, 500).
 - **Memory Efficient**: Streams wordlists directly from disk to handle millions of entries without high RAM usage.
 - **Easy Installation**: Supports `go install` for quick setup.
+- **Help Menu**: Built-in help menu with `-h` flag.
 
 ## Installation 🛠️
 
@@ -25,11 +27,12 @@ go install github.com/xhackingz/apifuzz@latest
 apifuzz -s subdomains.txt -w wordlists/ultimate_fuzz_master.txt -t 100
 ```
 
-### Flags:
-- `-s`: Path to the file containing subdomains (one per line).
-- `-w`: Path to the wordlist file.
+### Options:
+- `-s`: Path to the file containing subdomains (one per line). **(Required)**
+- `-w`: Path to the wordlist file. **(Required)**
 - `-t`: Number of concurrent threads (default: 50).
 - `-timeout`: HTTP timeout in seconds (default: 10).
+- `-h`: Show help menu and usage instructions.
 
 ## Wordlist Sources 📚
 The **Ultimate Fuzz Master** wordlist is a deduplicated aggregation of:
