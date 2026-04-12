@@ -152,20 +152,6 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
         var doneCount int64
         var errorCount int64
 
-        // WAF/rate-limit detection counters
-        var status403Count int64
-        var status429Count int64
-
-        // Cross-domain deduplication (multi-target mode only).
-        // If the same wordlist entry produces hits on crossDomainLimit or more
-        // different domains it is almost certainly a shared/global API path rather
-        // than a domain-specific finding.  We show the first crossDomainLimit hits
-        // normally, then suppress the rest and emit a single [GLOBAL] notice.
-        const crossDomainLimit = 10
-        var wordHitCounts sync.Map // map[string]*int64 — hit count per payload word
-        var crossDomainFiltered int64
-        multiTargetMode := len(targets) > 1
-
         ctx := r.conf.Context
         if r.conf.MaxTime > 0 {
                 var cancel context.CancelFunc
@@ -191,21 +177,15 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
         go func() {
                 ticker := time.NewTicker(100 * time.Millisecond)
                 defer ticker.Stop()
-                const warnCooldown = 30 * time.Second
-                var lastWarn403Time time.Time
-                var lastWarn429Time time.Time
                 for {
                         select {
                         case <-progressStop:
                                 return
                         case <-ticker.C:
-                                cur := atomic.LoadInt64(&doneCount)
-                                errs := atomic.LoadInt64(&errorCount)
-                                found := atomic.LoadInt64(&foundCount)
-                                cnt403 := atomic.LoadInt64(&status403Count)
-                                cnt429 := atomic.LoadInt64(&status429Count)
-
                                 if !r.conf.Quiet && !r.conf.Json {
+                                        cur := atomic.LoadInt64(&doneCount)
+                                        errs := atomic.LoadInt64(&errorCount)
+                                        found := atomic.LoadInt64(&foundCount)
                                         elapsed := time.Since(r.startTime).Seconds()
                                         rps := 0.0
                                         if elapsed > 0 {
@@ -222,19 +202,6 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                                         }
                                         fmt.Fprintf(os.Stderr, "\r\033[2K:: Progress: [%d/%d] (%.1f%%) :: Found: %d :: %.0f req/sec :: Errors: %d%s",
                                                 cur, total, pct, found, rps, errs, eta)
-                                }
-
-                                // Warn if WAF/rate-limiting is likely — at most once per 30s to avoid spam
-                                if cur > 50 {
-                                        ratio403 := float64(cnt403) / float64(cur)
-                                        if ratio403 > 0.80 && time.Since(lastWarn403Time) > warnCooldown {
-                                                lastWarn403Time = time.Now()
-                                                fmt.Fprintf(os.Stderr, "\n\033[33m[WARN] %.0f%% of responses are 403 Forbidden — server may be blocking automated requests. Try: -t 5, -p 0.5-1.5, or -H 'Authorization: Bearer TOKEN'\033[0m\n", ratio403*100)
-                                        }
-                                }
-                                if cnt429 > 10 && time.Since(lastWarn429Time) > warnCooldown {
-                                        lastWarn429Time = time.Now()
-                                        fmt.Fprintf(os.Stderr, "\n\033[33m[WARN] Received %d × 429 Too Many Requests — try: -rate 10, -p 1.0-2.0, or -t 5\033[0m\n", cnt429)
                                 }
                         }
                 }
@@ -283,51 +250,6 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                                                 continue
                                         }
 
-                                        // Track WAF/rate-limit signals
-                                        if res.StatusCode == 403 {
-                                                atomic.AddInt64(&status403Count, 1)
-                                        }
-                                        if res.StatusCode == 429 {
-                                                atomic.AddInt64(&status429Count, 1)
-                                        }
-
-                                        // Stop-on-403 check: if > 95% are 403 after 50+ requests
-                                        if r.conf.StopOn403 || r.conf.StopOnAll {
-                                                cur := atomic.LoadInt64(&doneCount)
-                                                if cur > 50 {
-                                                        cnt403 := atomic.LoadInt64(&status403Count)
-                                                        if float64(cnt403)/float64(cur) > 0.95 {
-                                                                if !r.conf.Quiet {
-                                                                        fmt.Fprintf(os.Stderr, "\n[WARN] > 95%% of responses are 403. Stopping (-sf). The server is likely blocking requests.\n")
-                                                                }
-                                                                r.conf.Cancel()
-                                                                return
-                                                        }
-                                                }
-                                        }
-
-                                        // Cross-domain dedup: in multi-target mode, suppress results
-                                        // for words that have already hit crossDomainLimit domains.
-                                        // On the (limit+1)th hit emit a single [GLOBAL] warning.
-                                        if multiTargetMode {
-                                                word := string(res.Input["FUZZ"])
-                                                val, _ := wordHitCounts.LoadOrStore(word, new(int64))
-                                                counter := val.(*int64)
-                                                n := atomic.AddInt64(counter, 1)
-                                                if n == int64(crossDomainLimit+1) {
-                                                        atomic.AddInt64(&crossDomainFiltered, 1)
-                                                        if !r.conf.Quiet {
-                                                                out.Warning(fmt.Sprintf("[GLOBAL ENDPOINT] /%s — already found on %d domains, suppressing further hits (likely shared API). Use -v to still see them.", word, crossDomainLimit))
-                                                        }
-                                                }
-                                                if n > int64(crossDomainLimit) {
-                                                        if r.conf.Verbose {
-                                                                out.PrintResult(res, fmt.Sprintf("global endpoint: hit on %d+ domains", crossDomainLimit))
-                                                        }
-                                                        continue
-                                                }
-                                        }
-
                                         show, reason := filter.ShouldShow(r.conf, &res)
                                         if show {
                                                 atomic.AddInt64(&foundCount, 1)
@@ -361,22 +283,6 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
 
         if !r.conf.Quiet {
                 fmt.Fprintln(os.Stderr)
-                cnt403 := atomic.LoadInt64(&status403Count)
-                cnt429 := atomic.LoadInt64(&status429Count)
-                done := atomic.LoadInt64(&doneCount)
-                if done > 0 {
-                        if float64(cnt403)/float64(done) > 0.50 {
-                                fmt.Fprintf(os.Stderr, "[WARN] %d/%d responses were 403 Forbidden. The server may be blocking fuzzing traffic.\n", cnt403, done)
-                                fmt.Fprintf(os.Stderr, "       Suggestions: reduce threads (-t 5), add delay (-p 1.0), add Authorization header (-H 'Authorization: Bearer TOKEN')\n")
-                        }
-                        if cnt429 > 0 {
-                                fmt.Fprintf(os.Stderr, "[WARN] %d rate-limit (429) responses received. Use -rate 10 or -p 1.0-2.0 to slow down.\n", cnt429)
-                        }
-                }
-                suppressed := atomic.LoadInt64(&crossDomainFiltered)
-                if suppressed > 0 {
-                        fmt.Fprintf(os.Stderr, "[INFO] %d global endpoint(s) suppressed (hit on 10+ domains). Run with -v to see all hits.\n", suppressed)
-                }
         }
 
         return out.Finalize()
