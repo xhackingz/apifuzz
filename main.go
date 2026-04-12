@@ -24,9 +24,10 @@ type Result struct {
 }
 
 var (
-	totalRequests uint64
-	foundResults  uint64
-	currentDomain string
+	totalRequestsDone uint64
+	foundResults      uint64
+	currentDomain     string
+	totalToProcess    uint64
 )
 
 func main() {
@@ -90,6 +91,14 @@ func main() {
 		}
 	}
 
+	// Pre-calculate total requests for progress bar
+	wordCount, err := countLines(*wordlist)
+	if err != nil {
+		fmt.Printf("Error counting wordlist: %v\n", err)
+		os.Exit(1)
+	}
+	totalToProcess = uint64(len(targets)) * uint64(wordCount)
+
 	client := &http.Client{
 		Timeout: time.Duration(*timeout) * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -97,13 +106,33 @@ func main() {
 		},
 	}
 
-	// Live Spinner/Counter
+	// Live Spinner/Progress Bar
+	startTime := time.Now()
 	go func() {
 		spinner := []string{"|", "/", "-", "\\"}
 		i := 0
 		for {
-			fmt.Printf("\r\033[36m[%s] Target: %s | Requests: %d | Found: %d\033[0m", 
-				spinner[i%len(spinner)], currentDomain, atomic.LoadUint64(&totalRequests), atomic.LoadUint64(&foundResults))
+			done := atomic.LoadUint64(&totalRequestsDone)
+			found := atomic.LoadUint64(&foundResults)
+			
+			percentage := 0.0
+			if totalToProcess > 0 {
+				percentage = float64(done) / float64(totalToProcess) * 100
+			}
+			
+			elapsed := time.Since(startTime).Seconds()
+			rps := 0.0
+			if elapsed > 0 {
+				rps = float64(done) / elapsed
+			}
+
+			remaining := int64(totalToProcess) - int64(done)
+			if remaining < 0 {
+				remaining = 0
+			}
+
+			fmt.Printf("\r\033[36m[%s] %s | Progress: %.2f%% | Done: %d | Remaining: %d | RPS: %.0f | Found: %d\033[0m", 
+				spinner[i%len(spinner)], currentDomain, percentage, done, remaining, rps, found)
 			i++
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -126,8 +155,8 @@ func main() {
 			go func() {
 				defer wg.Done()
 				for url := range jobs {
-					atomic.AddUint64(&totalRequests, 1)
 					resp, err := client.Get(url)
+					atomic.AddUint64(&totalRequestsDone, 1)
 					if err != nil {
 						continue
 					}
@@ -201,4 +230,19 @@ func readLines(path string) ([]string, error) {
 	return lines, scanner.Err()
 }
 
-// Version 1.3.0
+func countLines(path string) (int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	count := 0
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		count++
+	}
+	return count, scanner.Err()
+}
+
+// Version 1.4.0
