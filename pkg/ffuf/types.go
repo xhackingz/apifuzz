@@ -7,7 +7,7 @@ import (
         "time"
 )
 
-const Version = "2.2.0"
+const Version = "2.3.0"
 
 const DefaultWordlistURL = "https://raw.githubusercontent.com/xhackingz/apifuzz/refs/heads/master/wordlists/ultimate_fuzz_master.txt"
 

@@ -43,6 +43,15 @@ type fuzzJob struct {
         URLTemplate string
 }
 
+// baselineResult holds the response fingerprint of the base URL (FUZZ replaced with "").
+// It is used to detect SPA catch-all / soft-redirect servers that return HTTP 200
+// with the same HTML page for every path, causing false positives.
+type baselineResult struct {
+        size  int64
+        words int64
+        lines int64
+}
+
 type SimpleRunner struct {
         conf      *ffuf.Config
         client    *http.Client
@@ -149,6 +158,21 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                                 out.Info(fmt.Sprintf("Auto-calibrating %d domains (this may take a moment)...", len(targets)))
                         }
                         perDomainFilters = r.autoCalibrateAll(targets, out)
+                }
+        }
+
+        // Probe the base URL for every target (always, not opt-in).
+        // Servers that return HTTP 200 with the same HTML page for every path
+        // (SPAs, marketing/redirect pages, catch-all soft-404 setups) are detected
+        // here so their responses can be suppressed as false positives during fuzzing.
+        perDomainBaselines := make(map[string]*baselineResult, len(targets))
+        for _, target := range targets {
+                b := r.probeBaseline(target)
+                if b != nil {
+                        perDomainBaselines[target] = b
+                        if !r.conf.Quiet {
+                                out.Info(fmt.Sprintf("Base URL baseline: size=%d words=%d lines=%d (responses matching this will be suppressed)", b.size, b.words, b.lines))
+                        }
                 }
         }
 
@@ -282,6 +306,18 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                                                                 }
                                                                 continue
                                                         }
+                                                }
+                                        }
+
+                                        // Baseline check: suppress results whose response fingerprint
+                                        // matches the base URL. This catches SPA/catch-all servers
+                                        // that return HTTP 200 with the same HTML for every path.
+                                        if b, ok := perDomainBaselines[job.URLTemplate]; ok {
+                                                if matchesBaseline(&res, b) {
+                                                        if r.conf.Verbose {
+                                                                out.PrintResult(res, "filtered: matches base URL baseline (soft-404 / SPA fallback suppression)")
+                                                        }
+                                                        continue
                                                 }
                                         }
 
@@ -669,6 +705,53 @@ func (r *SimpleRunner) autoCalibrateAll(targets []string, out ffuf.OutputProvide
                 out.Info(fmt.Sprintf("Auto-calibration complete: %d/%d domains have a soft-404 baseline active", n, len(targets)))
         }
         return result
+}
+
+// probeBaseline sends a GET request to the base URL (FUZZ replaced with an
+// empty string) and returns its response fingerprint. Returns nil if the
+// request fails, times out, or returns a non-200 status code — in those cases
+// no baseline filter is applied for this target.
+func (r *SimpleRunner) probeBaseline(urlTemplate string) *baselineResult {
+        res := r.doRequest("", urlTemplate)
+        if res.StatusCode != 200 {
+                return nil
+        }
+        return &baselineResult{
+                size:  res.ContentLength,
+                words: res.ContentWords,
+                lines: res.ContentLines,
+        }
+}
+
+// matchesBaseline returns true when a fuzz result looks identical or near-
+// identical to the base URL baseline, indicating a SPA catch-all or soft-
+// redirect server that returns the same HTML page for every path.
+//
+// Matching criteria (any one is sufficient):
+//   - Exact size match
+//   - Within ±5% of baseline size (tolerates minor dynamic content like timestamps)
+//   - Same word count (fallback when size varies more than 5%)
+//   - Same line count (final fallback)
+func matchesBaseline(res *ffuf.Result, b *baselineResult) bool {
+        if b == nil {
+                return false
+        }
+        if b.size > 0 {
+                diff := res.ContentLength - b.size
+                if diff < 0 {
+                        diff = -diff
+                }
+                if diff == 0 || float64(diff)/float64(b.size) <= 0.05 {
+                        return true
+                }
+        }
+        if b.words > 0 && res.ContentWords == b.words {
+                return true
+        }
+        if b.lines > 0 && res.ContentLines == b.lines {
+                return true
+        }
+        return false
 }
 
 func countWordsLines(body []byte) (int, int) {
