@@ -7,7 +7,7 @@ import (
         "time"
 )
 
-const Version = "2.3.0"
+const Version = "2.4.0"
 
 const DefaultWordlistURL = "https://raw.githubusercontent.com/xhackingz/apifuzz/refs/heads/master/wordlists/ultimate_fuzz_master.txt"
 
@@ -24,6 +24,14 @@ type Result struct {
         Duration         time.Duration     `json:"duration"`
         Host             string            `json:"host"`
         RetryAfter       int64             `json:"-"`
+
+        // Computed by the runner for false positive validation.
+        // None of these fields are included in JSON/CSV output.
+        SimHash        uint64 `json:"-"`
+        Title          string `json:"-"`
+        HasSoftError   bool   `json:"-"`
+        HasSoftRedir   bool   `json:"-"`
+        IsCDNHit       bool   `json:"-"`
 }
 
 type FilterProvider interface {
