@@ -128,13 +128,27 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                 targets = r.conf.Targets
         }
 
-        // Auto-calibration: run against the first (or only) target
+        // Per-domain calibration baselines.
+        // In single-target mode this is nil and global conf.Filters are used instead.
+        // In multi-target mode each domain gets its own noise signature so soft-404
+        // behaviour on one subdomain does not mask real findings on another.
+        var perDomainFilters map[string][]ffuf.FilterProvider
+
         if r.conf.AutoCalibration {
-                if !r.conf.Quiet {
-                        out.Info("Running auto-calibration...")
-                }
-                if err := r.autoCalibrate(out); err != nil && !r.conf.Quiet {
-                        out.Warning(fmt.Sprintf("Auto-calibration warning: %v", err))
+                if len(targets) == 1 {
+                        // Single target: write calibration results into global Filters as before
+                        if !r.conf.Quiet {
+                                out.Info("Running auto-calibration...")
+                        }
+                        if err := r.autoCalibrate(out); err != nil && !r.conf.Quiet {
+                                out.Warning(fmt.Sprintf("Auto-calibration warning: %v", err))
+                        }
+                } else {
+                        // Multi-target: calibrate every domain independently and store per-domain
+                        if !r.conf.Quiet {
+                                out.Info(fmt.Sprintf("Auto-calibrating %d domains (this may take a moment)...", len(targets)))
+                        }
+                        perDomainFilters = r.autoCalibrateAll(targets, out)
                 }
         }
 
@@ -248,6 +262,27 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                                                         return
                                                 }
                                                 continue
+                                        }
+
+                                        // Per-domain calibration check.
+                                        // If this domain was calibrated, test the result against
+                                        // its noise baseline before applying global matchers.
+                                        if perDomainFilters != nil {
+                                                if domFilters, ok := perDomainFilters[job.URLTemplate]; ok {
+                                                        noisy := false
+                                                        for _, f := range domFilters {
+                                                                if matched, err := f.Filter(&res); err == nil && matched {
+                                                                        noisy = true
+                                                                        break
+                                                                }
+                                                        }
+                                                        if noisy {
+                                                                if r.conf.Verbose {
+                                                                        out.PrintResult(res, "filtered: matches domain noise baseline (-ac)")
+                                                                }
+                                                                continue
+                                                        }
+                                                }
                                         }
 
                                         show, reason := filter.ShouldShow(r.conf, &res)
@@ -512,71 +547,128 @@ func normalizeURL(raw string) string {
         return raw
 }
 
-// autoCalibrate sends baseline requests and sets filters for responses that
-// match the baseline (soft 404s, generic error pages, etc.).
-func (r *SimpleRunner) autoCalibrate(out ffuf.OutputProvider) error {
-        const calibSamples = 5
+// calibrateTarget sends a small number of requests to provably-nonexistent
+// paths on urlTemplate and returns FilterProvider entries that describe the
+// domain's noise baseline (soft-404 / generic error page profile).
+// Returns nil filters (no error) when the domain returns 401/403 for probes —
+// those domains simply can't be calibrated without credentials.
+func (r *SimpleRunner) calibrateTarget(urlTemplate string) ([]ffuf.FilterProvider, error) {
+        const calibSamples = 3
 
-        // Use the first configured target for calibration
-        urlTemplate := r.conf.Url
-        if len(r.conf.Targets) > 0 {
-                urlTemplate = r.conf.Targets[0]
-        }
-
-        type sample struct {
-                size, words, lines int64
-        }
+        type sample struct{ size, words, lines int64 }
         samples := make([]sample, 0, calibSamples)
 
         for i := 0; i < calibSamples; i++ {
                 res := r.doRequest(randomString(24), urlTemplate)
                 if res.StatusCode == 0 {
-                        return fmt.Errorf("calibration requests are failing (network error) — server may be unreachable")
+                        return nil, fmt.Errorf("network error during calibration")
                 }
-                if res.StatusCode == 403 {
-                        return fmt.Errorf("calibration requests returned 403 Forbidden — the server is blocking requests. Consider disabling -ac or adding an Authorization header")
+                // 401/403 means the domain requires auth — skip calibration silently
+                if res.StatusCode == 401 || res.StatusCode == 403 {
+                        return nil, nil
                 }
                 samples = append(samples, sample{res.ContentLength, res.ContentWords, res.ContentLines})
         }
 
-        if len(samples) == 0 {
-                return fmt.Errorf("no calibration samples collected")
+        if len(samples) < calibSamples {
+                return nil, fmt.Errorf("insufficient calibration samples")
         }
 
-        // If all samples share the same size, add a size filter
-        allSameSize := true
+        allSameSize  := true
         allSameWords := true
         allSameLines := true
         for _, s := range samples[1:] {
-                if s.size != samples[0].size {
-                        allSameSize = false
-                }
-                if s.words != samples[0].words {
-                        allSameWords = false
-                }
-                if s.lines != samples[0].lines {
-                        allSameLines = false
-                }
+                if s.size  != samples[0].size  { allSameSize  = false }
+                if s.words != samples[0].words { allSameWords = false }
+                if s.lines != samples[0].lines { allSameLines = false }
         }
 
+        var filters []ffuf.FilterProvider
         if allSameSize && samples[0].size > 0 {
-                r.conf.Filters["size"] = &ffuf.SizeFilterEntry{Value: strconv.FormatInt(samples[0].size, 10)}
-                if !r.conf.Quiet {
-                        out.Info(fmt.Sprintf("Auto-filter: response size %d bytes", samples[0].size))
-                }
+                filters = append(filters, &ffuf.SizeFilterEntry{Value: strconv.FormatInt(samples[0].size, 10)})
         } else if allSameWords && samples[0].words > 0 {
-                r.conf.Filters["words"] = &ffuf.WordFilterEntry{Value: strconv.FormatInt(samples[0].words, 10)}
-                if !r.conf.Quiet {
-                        out.Info(fmt.Sprintf("Auto-filter: response words %d", samples[0].words))
-                }
+                filters = append(filters, &ffuf.WordFilterEntry{Value: strconv.FormatInt(samples[0].words, 10)})
         } else if allSameLines && samples[0].lines > 0 {
-                r.conf.Filters["lines"] = &ffuf.LineFilterEntry{Value: strconv.FormatInt(samples[0].lines, 10)}
-                if !r.conf.Quiet {
-                        out.Info(fmt.Sprintf("Auto-filter: response lines %d", samples[0].lines))
-                }
+                filters = append(filters, &ffuf.LineFilterEntry{Value: strconv.FormatInt(samples[0].lines, 10)})
+        }
+        return filters, nil
+}
+
+// autoCalibrate is the single-target calibration path.
+// It calls calibrateTarget and writes the resulting filters into the global
+// conf.Filters so that filter.ShouldShow picks them up automatically.
+func (r *SimpleRunner) autoCalibrate(out ffuf.OutputProvider) error {
+        urlTemplate := r.conf.Url
+        if len(r.conf.Targets) > 0 {
+                urlTemplate = r.conf.Targets[0]
         }
 
+        filters, err := r.calibrateTarget(urlTemplate)
+        if err != nil {
+                return err
+        }
+
+        for _, f := range filters {
+                switch v := f.(type) {
+                case *ffuf.SizeFilterEntry:
+                        r.conf.Filters["size"] = v
+                        if !r.conf.Quiet {
+                                out.Info(fmt.Sprintf("Auto-filter: response size %s bytes", v.Value))
+                        }
+                case *ffuf.WordFilterEntry:
+                        r.conf.Filters["words"] = v
+                        if !r.conf.Quiet {
+                                out.Info(fmt.Sprintf("Auto-filter: response words %s", v.Value))
+                        }
+                case *ffuf.LineFilterEntry:
+                        r.conf.Filters["lines"] = v
+                        if !r.conf.Quiet {
+                                out.Info(fmt.Sprintf("Auto-filter: response lines %s", v.Value))
+                        }
+                }
+        }
         return nil
+}
+
+// autoCalibrateAll runs calibrateTarget concurrently for every domain in targets
+// and returns a map[urlTemplate]→[]FilterProvider.  Domains that return 401/403
+// for probes, or have dynamic error pages, simply have no entry in the map and
+// are fuzzed without a baseline filter.
+func (r *SimpleRunner) autoCalibrateAll(targets []string, out ffuf.OutputProvider) map[string][]ffuf.FilterProvider {
+        result := make(map[string][]ffuf.FilterProvider, len(targets))
+        var mu sync.Mutex
+
+        // Limit concurrent calibration goroutines to avoid overwhelming the network
+        const concurrency = 50
+        sem := make(chan struct{}, concurrency)
+
+        var wg sync.WaitGroup
+        var calibrated int64
+
+        for _, target := range targets {
+                wg.Add(1)
+                go func(urlTemplate string) {
+                        defer wg.Done()
+                        sem <- struct{}{}
+                        defer func() { <-sem }()
+
+                        filters, err := r.calibrateTarget(urlTemplate)
+                        if err != nil || len(filters) == 0 {
+                                return
+                        }
+                        mu.Lock()
+                        result[urlTemplate] = filters
+                        mu.Unlock()
+                        atomic.AddInt64(&calibrated, 1)
+                }(target)
+        }
+        wg.Wait()
+
+        if !r.conf.Quiet {
+                n := atomic.LoadInt64(&calibrated)
+                out.Info(fmt.Sprintf("Auto-calibration complete: %d/%d domains have a soft-404 baseline active", n, len(targets)))
+        }
+        return result
 }
 
 func countWordsLines(body []byte) (int, int) {
