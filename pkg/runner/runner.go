@@ -167,17 +167,43 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                 }
         }
 
-        // Probe the base URL for every target (always, not opt-in).
-        // Servers that return HTTP 200 with the same HTML page for every path
-        // (SPAs, marketing/redirect pages, catch-all soft-404 setups) are detected
-        // here so their responses can be suppressed as false positives during fuzzing.
+        // Probe every target with random paths to detect catch-all baselines.
+        // Runs concurrently (capped at 50 goroutines) so that even large -targets
+        // files (hundreds of domains) are probed quickly.
+        // Baseline detection works even when the root URL redirects — it uses
+        // random-path probes that hit the catch-all handler directly.
         perDomainBaselines := make(map[string]*baselineResult, len(targets))
-        for _, target := range targets {
-                b := r.probeBaseline(target)
-                if b != nil {
-                        perDomainBaselines[target] = b
-                        if !r.conf.Quiet {
-                                out.Info(fmt.Sprintf("Base URL baseline: size=%d words=%d lines=%d (responses matching this will be suppressed)", b.size, b.words, b.lines))
+        {
+                var blMu sync.Mutex
+                var blWg sync.WaitGroup
+                var blDetected int64
+                blSem := make(chan struct{}, 50)
+
+                for _, target := range targets {
+                        blWg.Add(1)
+                        go func(tmpl string) {
+                                defer blWg.Done()
+                                blSem <- struct{}{}
+                                defer func() { <-blSem }()
+
+                                b := r.probeBaseline(tmpl)
+                                if b == nil {
+                                        return
+                                }
+                                blMu.Lock()
+                                perDomainBaselines[tmpl] = b
+                                blMu.Unlock()
+                                atomic.AddInt64(&blDetected, 1)
+                        }(target)
+                }
+                blWg.Wait()
+
+                if !r.conf.Quiet {
+                        n := atomic.LoadInt64(&blDetected)
+                        if n > 0 {
+                                out.Info(fmt.Sprintf("Baseline detection: %d/%d targets have a catch-all baseline active (false positives will be suppressed)", n, len(targets)))
+                        } else {
+                                out.Info("Baseline detection: no catch-all pattern found (targets return unique responses per path)")
                         }
                 }
         }
@@ -784,22 +810,97 @@ func (r *SimpleRunner) autoCalibrateAll(targets []string, out ffuf.OutputProvide
         return result
 }
 
-// probeBaseline sends a GET request to the base URL (FUZZ replaced with an
-// empty string) and returns its multi-dimensional response fingerprint.
-// Returns nil if the request fails, times out, or returns a non-200 status —
-// in those cases no baseline filter is applied for this target.
+// probeBaseline detects the noise baseline for a target by sending a small
+// number of requests with provably-nonexistent random paths.  If those probes
+// return consistent responses — same size, SimHash, or word/line count — the
+// target is a catch-all and the shared fingerprint is used to suppress false
+// positives during fuzzing.
+//
+// This approach is robust against the most common failure mode of base-URL-
+// based probing: when the root URL redirects (login walls, marketing homepages,
+// API gateway catch-alls), a base-URL probe returns non-200 and no baseline
+// is set.  Random paths hit the catch-all handler directly.
 func (r *SimpleRunner) probeBaseline(urlTemplate string) *baselineResult {
-        res := r.doRequest("", urlTemplate)
-        if res.StatusCode != 200 {
+        const numProbes = 3
+
+        type snap struct {
+                size, words, lines int64
+                simhash            uint64
+                title              string
+        }
+
+        snaps := make([]snap, 0, numProbes)
+        for i := 0; i < numProbes; i++ {
+                res := r.doRequest(randomString(24), urlTemplate)
+                // Skip network errors and auth-blocked responses.
+                if res.StatusCode == 0 || res.StatusCode == 401 || res.StatusCode == 403 {
+                        continue
+                }
+                snaps = append(snaps, snap{
+                        size:    res.ContentLength,
+                        words:   res.ContentWords,
+                        lines:   res.ContentLines,
+                        simhash: res.SimHash,
+                        title:   res.Title,
+                })
+        }
+
+        if len(snaps) < 2 {
+                // Not enough data to establish a reliable baseline.
                 return nil
         }
-        return &baselineResult{
-                size:    res.ContentLength,
-                words:   res.ContentWords,
-                lines:   res.ContentLines,
-                simhash: res.SimHash,
-                title:   res.Title,
+
+        first := snaps[0]
+
+        // Consistent byte size — strongest signal, use it directly.
+        allSameSize := true
+        for _, s := range snaps[1:] {
+                if s.size != first.size {
+                        allSameSize = false
+                        break
+                }
         }
+        if allSameSize && first.size > 0 {
+                return &baselineResult{size: first.size, words: first.words, lines: first.lines, simhash: first.simhash, title: first.title}
+        }
+
+        // Structurally near-identical bodies (SimHash Hamming distance ≤ 5).
+        allSimilar := true
+        for _, s := range snaps[1:] {
+                if s.simhash == 0 || hammingDistance(s.simhash, first.simhash) > 5 {
+                        allSimilar = false
+                        break
+                }
+        }
+        if allSimilar && first.simhash != 0 {
+                return &baselineResult{size: first.size, words: first.words, lines: first.lines, simhash: first.simhash, title: first.title}
+        }
+
+        // Consistent word count — fallback for pages with dynamic whitespace.
+        allSameWords := true
+        for _, s := range snaps[1:] {
+                if s.words != first.words {
+                        allSameWords = false
+                        break
+                }
+        }
+        if allSameWords && first.words > 0 {
+                return &baselineResult{size: first.size, words: first.words, lines: first.lines, simhash: first.simhash, title: first.title}
+        }
+
+        // Consistent line count — final fallback.
+        allSameLines := true
+        for _, s := range snaps[1:] {
+                if s.lines != first.lines {
+                        allSameLines = false
+                        break
+                }
+        }
+        if allSameLines && first.lines > 0 {
+                return &baselineResult{size: first.size, words: first.words, lines: first.lines, simhash: first.simhash, title: first.title}
+        }
+
+        return nil
 }
 
 // matchesBaseline returns true when a fuzz result looks identical or near-
