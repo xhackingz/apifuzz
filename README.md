@@ -1,6 +1,6 @@
 # xhacking_z | apifuzz
 
-A fast, smart API fuzzing tool built for real-world targets — handles WAF detection, rate limiting, bot-detection bypass, and full URL output out of the box.
+A fast, production-grade API fuzzing tool built for real-world targets — handles WAF detection, rate limiting, bot-detection bypass, and a full six-category false positive validation engine that eliminates noise automatically.
 
 Written in Go by **xhacking_z**.
 
@@ -8,14 +8,48 @@ Written in Go by **xhacking_z**.
 
 ---
 
+## Why apifuzz is different
+
+Most fuzzers match on HTTP status code alone. That means anything returning `200 OK` is logged as a hit — even if the `200` is a marketing page, an SPA shell, a CDN cache dump, or a "Page Not Found" message rendered inside a `200` envelope.
+
+**apifuzz eliminates all of that automatically.** Before the first fuzz request is sent, it fingerprints the target and runs every response through a six-category false positive validation pipeline. You get only real endpoint discoveries.
+
+---
+
+## False Positive Validation Engine
+
+Six categories of false positives are detected and suppressed — no flags required, no manual rules per site.
+
+### Category 1 — Soft 404s
+HTTP `200` responses that contain error text in the body ("Page not found", "Route not found", "Does not exist", etc.). The tool scans the stripped HTML body for a curated set of error phrases and suppresses the result.
+
+### Category 2 — SPA / Catch-all routing
+Single-page apps and catch-all servers return the same `index.html` for every path. Before fuzzing starts, apifuzz fetches the base URL and records its response size, word count, and line count. Any fuzz response within ±5% of that fingerprint is suppressed — across every domain in multi-target mode independently.
+
+### Category 3 — Soft redirects / landing pages
+Servers that return `200` with a marketing page or "service moved" message (like the Intuit Online Payroll example). Detected via two signals: HTML `<title>` tag match against the base URL fingerprint, and JavaScript / meta-tag soft-redirect patterns (`window.location`, `location.href`, `<meta http-equiv="refresh">`).
+
+### Category 4 — CDN / proxy cache normalization
+CDN edge nodes serve the same cached object for every cache-miss path. Detected from response headers: `X-Cache: HIT`, `CF-Cache-Status: HIT`, `X-Proxy-Cache: HIT`, non-zero `Age` header combined with `X-Served-By`. Cache-HIT responses are suppressed.
+
+### Category 5 — Redirect sink detection
+When a server redirects every unknown path to the same destination (a login page, a 404 page, a catch-all), the `Location` header repeats identically across all results. apifuzz tracks the frequency of each redirect destination. Once a `Location` value appears more than 10 times, all subsequent results with that destination are suppressed as a redirect sink.
+
+### Category 6 — Near-duplicate body detection (SimHash)
+Pages with minor dynamic content — timestamps, session tokens, nonces — vary slightly in byte size but are structurally identical. apifuzz computes a **64-bit SimHash fingerprint** of the stripped HTML body for every response and the base URL baseline. Results with a Hamming distance ≤ 5 bits from the baseline (>92% structural similarity) are suppressed regardless of size difference.
+
+---
+
 ## Features
 
+- **6-category false positive engine** — always-on, zero configuration, per-domain adaptive
+- **SimHash near-duplicate detection** — catches structurally identical pages that size filters miss
 - **Full URL output** — every match prints the complete resolved URL, never truncated
 - **Multi-domain fuzzing** (`-targets`) — fuzz multiple targets simultaneously using a shared thread pool
 - **WAF bypass** — sends realistic browser headers (`Sec-Fetch-*`, `Accept-Encoding`, `Cache-Control`, `Sec-Ch-Ua`) that bot-detection systems expect
 - **Rate-limit handling** — auto-detects 429 / 503 responses and retries with exponential backoff
 - **WAF detection** — warns in real time when >80% of responses are 403, with suggested mitigations
-- **Auto-calibration** (`-ac`) — filters out generic error pages without manual tuning
+- **Auto-calibration** (`-ac`) — additionally filters out generic error pages using random-probe baseline
 - **Debug mode** (`-debug`) — prints every request and response header + body preview
 - **Rotating User-Agents** — cycles through 5 realistic Chrome / Firefox / Safari UAs
 - **Colored output** (`-c`) — status codes, matches, errors, and progress all color-coded
@@ -61,7 +95,7 @@ go build -buildvcs=false -o apifuzz .
 ### Examples
 
 ```bash
-# Basic path fuzzing
+# Basic path fuzzing — false positive engine runs automatically
 ./apifuzz -u https://api.example.com/FUZZ -mc 200 -c
 
 # With custom wordlist and colored output
@@ -74,7 +108,10 @@ go build -buildvcs=false -o apifuzz .
 # Debug mode — see every request and response
 ./apifuzz -u https://api.example.com/FUZZ -t 1 -mc 200 -debug
 
-# Auto-calibrate to remove false positives
+# Verbose — see what is filtered and why
+./apifuzz -u https://api.example.com/FUZZ -mc 200 -v -c
+
+# Auto-calibrate (random-probe baseline, in addition to the built-in engine)
 ./apifuzz -u https://api.example.com/FUZZ -ac -mc 200 -c
 
 # POST body fuzzing
@@ -89,6 +126,8 @@ go build -buildvcs=false -o apifuzz .
 ## Multi-Domain Fuzzing
 
 Use `-targets` to fuzz multiple API domains at the same time. All targets share a single thread pool — no performance loss, no sequential queuing.
+
+The false positive engine runs **per-domain independently** in multi-target mode. Each domain gets its own baseline fingerprint, SimHash anchor, redirect sink counter, and CDN hit tracker. One domain's catch-all page does not pollute another domain's results.
 
 ### 1. Create a targets file
 
@@ -183,7 +222,7 @@ This means every domain receives traffic simultaneously — increasing `-t` spee
 | `-p` | Delay between requests in seconds, e.g. `0.5` or `0.5-2.0` range |
 | `-timeout` | HTTP timeout in seconds (default: `10`) |
 | `-retries` | Retry failed / rate-limited requests N times (default: `0`) |
-| `-ac` | Auto-calibrate: filter out baseline noise automatically |
+| `-ac` | Auto-calibrate: filter out baseline noise using random probes (in addition to built-in engine) |
 | `-mc` | Match HTTP status codes (default: `200,204,301,302,307,401,403,405`) |
 | `-fc` | Filter HTTP status codes |
 | `-ms` | Match response size (bytes) |
@@ -200,7 +239,7 @@ This means every domain receives traffic simultaneously — increasing `-t` spee
 | `-o` | Output file path |
 | `-of` | Output format: `json` (default), `csv`, `md` |
 | `-c` | Colored output |
-| `-v` | Verbose — show filtered results dimmed |
+| `-v` | Verbose — show filtered results with suppression reason |
 | `-s` | Silent mode — results only |
 | `-debug` | Debug mode — print raw request/response details |
 | `-json` | Print results as JSON to stdout |
@@ -236,7 +275,7 @@ When a server returns 403 for everything during fuzzing (even known valid endpoi
 
 ## Auto-calibration
 
-Before scanning, apifuzz sends 5 requests with random payloads. If most responses share the same size, word count, or line count, those values are automatically added as filters. This removes generic "not found" pages without manual tuning.
+The built-in false positive engine (always-on) is complemented by optional auto-calibration (`-ac`). When `-ac` is used, apifuzz sends 5 additional requests with random payloads before scanning. If most responses share the same size, word count, or line count, those values are added as extra filters — layered on top of the six-category engine.
 
 **Note:** If the server is already rate-limiting during calibration (returning 403 to all 5 baseline requests), apifuzz will warn you and suggest disabling `-ac`.
 
@@ -251,6 +290,14 @@ URL                                                              Status      Siz
 ------------------------------------------------------------------------------------------------------------
 https://api.example.com/v1/GuestSession/88e23aa3-015c-...
                                                                     200       1423      56      12     392ms
+```
+
+Use `-v` (verbose) to also see filtered results and the reason each was suppressed:
+
+```
+[filtered] https://api.example.com/FUZZ → filtered: matches base URL baseline (SPA / soft-redirect / near-duplicate)
+[filtered] https://api.example.com/home → filtered: soft-404 phrase detected in response body
+[filtered] https://api.example.com/old  → filtered: JavaScript/meta soft-redirect detected in response body
 ```
 
 ---
