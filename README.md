@@ -223,17 +223,17 @@ This means every domain receives traffic simultaneously — increasing `-t` spee
 | `-timeout` | HTTP timeout in seconds (default: `10`) |
 | `-retries` | Retry failed / rate-limited requests N times (default: `0`) |
 | `-ac` | Auto-calibrate: filter out baseline noise using random probes (in addition to built-in engine) |
-| `-mc` | Match HTTP status codes (default: `200,204,301,302,307,401,403,405`) |
+| `-mc` | Match HTTP status codes (default: `200,204,301,302,307,401,403,405`; supports `all`, lists, and ranges like `200-299`) |
 | `-fc` | Filter HTTP status codes |
-| `-ms` | Match response size (bytes) |
+| `-ms` | Match response size (bytes; supports lists and ranges) |
 | `-fs` | Filter response size (bytes) |
-| `-mw` | Match word count |
+| `-mw` | Match word count (supports lists and ranges) |
 | `-fw` | Filter word count |
-| `-ml` | Match line count |
+| `-ml` | Match line count (supports lists and ranges) |
 | `-fl` | Filter line count |
-| `-mr` | Match regexp |
+| `-mr` | Match regexp against response body |
 | `-fr` | Filter regexp |
-| `-mt` | Match response time (ms) |
+| `-mt` | Match response time (ms; supports lists and ranges) |
 | `-ft` | Filter response time (ms) |
 | `-e` | Extensions to append, e.g. `.php,.html` |
 | `-o` | Output file path |
@@ -275,9 +275,9 @@ When a server returns 403 for everything during fuzzing (even known valid endpoi
 
 ## Auto-calibration
 
-The built-in false positive engine (always-on) is complemented by optional auto-calibration (`-ac`). When `-ac` is used, apifuzz sends 5 additional requests with random payloads before scanning. If most responses share the same size, word count, or line count, those values are added as extra filters — layered on top of the six-category engine.
+The built-in false positive engine (always-on) is complemented by optional auto-calibration (`-ac`). When `-ac` is used, apifuzz sends random nonexistent payloads before scanning. Matching calibration responses are compared by size, word count, and line count, then stable values are added as extra filters — layered on top of the six-category engine.
 
-**Note:** If the server is already rate-limiting during calibration (returning 403 to all 5 baseline requests), apifuzz will warn you and suggest disabling `-ac`.
+**Note:** Calibration only learns from responses that would otherwise pass the active matcher/filter rules. If the server is already rate-limiting or returning responses outside your matchers during calibration, apifuzz skips those samples instead of creating noisy filters.
 
 ---
 

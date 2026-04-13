@@ -10,6 +10,63 @@ import (
 	"apifuzz/pkg/ffuf"
 )
 
+type valueRange struct {
+	min int64
+	max int64
+}
+
+func parseValueRanges(value string, allowAll bool) ([]valueRange, bool, error) {
+	value = strings.TrimSpace(value)
+	if allowAll && value == "all" {
+		return nil, true, nil
+	}
+
+	ranges := []valueRange{}
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		if strings.Contains(part, "-") {
+			bounds := strings.SplitN(part, "-", 2)
+			if len(bounds) != 2 || strings.TrimSpace(bounds[0]) == "" || strings.TrimSpace(bounds[1]) == "" {
+				return nil, false, fmt.Errorf("invalid range: %s", part)
+			}
+			min, err := strconv.ParseInt(strings.TrimSpace(bounds[0]), 10, 64)
+			if err != nil {
+				return nil, false, fmt.Errorf("invalid range minimum: %s", bounds[0])
+			}
+			max, err := strconv.ParseInt(strings.TrimSpace(bounds[1]), 10, 64)
+			if err != nil {
+				return nil, false, fmt.Errorf("invalid range maximum: %s", bounds[1])
+			}
+			if min > max {
+				return nil, false, fmt.Errorf("invalid range %s: minimum is greater than maximum", part)
+			}
+			ranges = append(ranges, valueRange{min: min, max: max})
+			continue
+		}
+
+		n, err := strconv.ParseInt(part, 10, 64)
+		if err != nil {
+			return nil, false, fmt.Errorf("invalid value: %s", part)
+		}
+		ranges = append(ranges, valueRange{min: n, max: n})
+	}
+
+	return ranges, false, nil
+}
+
+func matchesRanges(value int64, ranges []valueRange) bool {
+	for _, r := range ranges {
+		if value >= r.min && value <= r.max {
+			return true
+		}
+	}
+	return false
+}
+
 func SetupFilters(opts *ffuf.ConfigOptions, conf *ffuf.Config) error {
 	// Add matchers
 	if err := addMatcher(conf, "status", opts.Filter.MatchStatus); err != nil {
@@ -113,6 +170,13 @@ func newFilterByName(name, value string) (ffuf.FilterProvider, error) {
 
 // ShouldShow returns true if the result should be shown, false with reason if filtered/not matched.
 func ShouldShow(conf *ffuf.Config, res *ffuf.Result) (bool, string) {
+	if passed, reason := PassesFilters(conf, res); !passed {
+		return false, reason
+	}
+	return MatchesMatchers(conf, res)
+}
+
+func PassesFilters(conf *ffuf.Config, res *ffuf.Result) (bool, string) {
 	// Apply active filters — if any filter matches, hide the result
 	for name, f := range conf.Filters {
 		matched, err := f.Filter(res)
@@ -123,7 +187,10 @@ func ShouldShow(conf *ffuf.Config, res *ffuf.Result) (bool, string) {
 			return false, fmt.Sprintf("Filtered by %s: %s", name, f.Repr())
 		}
 	}
+	return true, ""
+}
 
+func MatchesMatchers(conf *ffuf.Config, res *ffuf.Result) (bool, string) {
 	// Apply matchers — result must satisfy at least one matcher (OR mode)
 	if len(conf.Matchers) > 0 {
 		anyMatched := false
@@ -153,41 +220,24 @@ func ShouldShow(conf *ffuf.Config, res *ffuf.Result) (bool, string) {
 // ─── Status Filter ───────────────────────────────────────────────────────────
 
 type StatusFilter struct {
-	value string
-	codes []int64
-	all   bool
+	value  string
+	ranges []valueRange
+	all    bool
 }
 
 func NewStatusFilter(value string) (*StatusFilter, error) {
-	f := &StatusFilter{value: value}
-	if value == "all" {
-		f.all = true
-		return f, nil
+	ranges, all, err := parseValueRanges(value, true)
+	if err != nil {
+		return nil, fmt.Errorf("invalid status code range %q: %w", value, err)
 	}
-	for _, part := range strings.Split(value, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		n, err := strconv.ParseInt(part, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid status code: %s", part)
-		}
-		f.codes = append(f.codes, n)
-	}
-	return f, nil
+	return &StatusFilter{value: value, ranges: ranges, all: all}, nil
 }
 
 func (f *StatusFilter) Filter(res *ffuf.Result) (bool, error) {
 	if f.all {
 		return true, nil
 	}
-	for _, c := range f.codes {
-		if res.StatusCode == c {
-			return true, nil
-		}
-	}
-	return false, nil
+	return matchesRanges(res.StatusCode, f.ranges), nil
 }
 
 func (f *StatusFilter) Repr() string        { return f.value }
@@ -196,33 +246,20 @@ func (f *StatusFilter) ReprVerbose() string { return "Response status: " + f.val
 // ─── Size Filter ─────────────────────────────────────────────────────────────
 
 type SizeFilter struct {
-	value string
-	sizes []int64
+	value  string
+	ranges []valueRange
 }
 
 func NewSizeFilter(value string) (*SizeFilter, error) {
-	f := &SizeFilter{value: value}
-	for _, part := range strings.Split(value, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		n, err := strconv.ParseInt(part, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid size value: %s", part)
-		}
-		f.sizes = append(f.sizes, n)
+	ranges, _, err := parseValueRanges(value, false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid size range %q: %w", value, err)
 	}
-	return f, nil
+	return &SizeFilter{value: value, ranges: ranges}, nil
 }
 
 func (f *SizeFilter) Filter(res *ffuf.Result) (bool, error) {
-	for _, s := range f.sizes {
-		if res.ContentLength == s {
-			return true, nil
-		}
-	}
-	return false, nil
+	return matchesRanges(res.ContentLength, f.ranges), nil
 }
 
 func (f *SizeFilter) Repr() string        { return f.value }
@@ -231,33 +268,20 @@ func (f *SizeFilter) ReprVerbose() string { return "Response size: " + f.value }
 // ─── Word Filter ─────────────────────────────────────────────────────────────
 
 type WordFilter struct {
-	value string
-	words []int64
+	value  string
+	ranges []valueRange
 }
 
 func NewWordFilter(value string) (*WordFilter, error) {
-	f := &WordFilter{value: value}
-	for _, part := range strings.Split(value, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		n, err := strconv.ParseInt(part, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid word count: %s", part)
-		}
-		f.words = append(f.words, n)
+	ranges, _, err := parseValueRanges(value, false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid word range %q: %w", value, err)
 	}
-	return f, nil
+	return &WordFilter{value: value, ranges: ranges}, nil
 }
 
 func (f *WordFilter) Filter(res *ffuf.Result) (bool, error) {
-	for _, w := range f.words {
-		if res.ContentWords == w {
-			return true, nil
-		}
-	}
-	return false, nil
+	return matchesRanges(res.ContentWords, f.ranges), nil
 }
 
 func (f *WordFilter) Repr() string        { return f.value }
@@ -266,33 +290,20 @@ func (f *WordFilter) ReprVerbose() string { return "Response words: " + f.value 
 // ─── Line Filter ─────────────────────────────────────────────────────────────
 
 type LineFilter struct {
-	value string
-	lines []int64
+	value  string
+	ranges []valueRange
 }
 
 func NewLineFilter(value string) (*LineFilter, error) {
-	f := &LineFilter{value: value}
-	for _, part := range strings.Split(value, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		n, err := strconv.ParseInt(part, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid line count: %s", part)
-		}
-		f.lines = append(f.lines, n)
+	ranges, _, err := parseValueRanges(value, false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid line range %q: %w", value, err)
 	}
-	return f, nil
+	return &LineFilter{value: value, ranges: ranges}, nil
 }
 
 func (f *LineFilter) Filter(res *ffuf.Result) (bool, error) {
-	for _, l := range f.lines {
-		if res.ContentLines == l {
-			return true, nil
-		}
-	}
-	return false, nil
+	return matchesRanges(res.ContentLines, f.ranges), nil
 }
 
 func (f *LineFilter) Repr() string        { return f.value }
@@ -314,7 +325,7 @@ func NewRegexpFilter(value string) (*RegexpFilter, error) {
 }
 
 func (f *RegexpFilter) Filter(res *ffuf.Result) (bool, error) {
-	return f.re.MatchString(res.Url), nil
+	return f.re.Match(res.Data), nil
 }
 
 func (f *RegexpFilter) Repr() string        { return f.value }
@@ -323,20 +334,20 @@ func (f *RegexpFilter) ReprVerbose() string { return "Regexp: " + f.value }
 // ─── Time Filter ─────────────────────────────────────────────────────────────
 
 type TimeFilter struct {
-	value string
-	ms    int64
+	value  string
+	ranges []valueRange
 }
 
 func NewTimeFilter(value string) (*TimeFilter, error) {
-	n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	ranges, _, err := parseValueRanges(value, false)
 	if err != nil {
-		return nil, fmt.Errorf("invalid time value (ms): %s", value)
+		return nil, fmt.Errorf("invalid time range %q: %w", value, err)
 	}
-	return &TimeFilter{value: value, ms: n}, nil
+	return &TimeFilter{value: value, ranges: ranges}, nil
 }
 
 func (f *TimeFilter) Filter(res *ffuf.Result) (bool, error) {
-	return res.Duration.Milliseconds() >= f.ms, nil
+	return matchesRanges(res.Duration.Milliseconds(), f.ranges), nil
 }
 
 func (f *TimeFilter) Repr() string        { return f.value + "ms" }
