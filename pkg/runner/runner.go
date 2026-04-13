@@ -43,20 +43,26 @@ type fuzzJob struct {
         URLTemplate string
 }
 
-// baselineResult holds the response fingerprint of the base URL (FUZZ replaced with "").
-// It is used to detect SPA catch-all / soft-redirect servers that return HTTP 200
-// with the same HTML page for every path, causing false positives.
+// baselineResult holds the multi-dimensional response fingerprint of the base URL
+// (FUZZ replaced with ""). It powers several false positive validation categories:
+//   - Category 2 (SPA/catch-all): size proximity, word/line count
+//   - Category 3 (soft redirects/landing pages): title match, SimHash similarity
+//   - Category 6 (near-duplicate bodies): SimHash Hamming distance
 type baselineResult struct {
-        size  int64
-        words int64
-        lines int64
+        size    int64
+        words   int64
+        lines   int64
+        simhash uint64
+        title   string
 }
 
 type SimpleRunner struct {
-        conf      *ffuf.Config
-        client    *http.Client
-        startTime time.Time
-        uaIndex   uint64
+        conf         *ffuf.Config
+        client       *http.Client
+        startTime    time.Time
+        uaIndex      uint64
+        sinkMu       sync.Mutex
+        sinkCounters map[string]int64 // redirect Location → hit count (Category 5)
 }
 
 func NewSimpleRunner(conf *ffuf.Config) *SimpleRunner {
@@ -89,7 +95,7 @@ func NewSimpleRunner(conf *ffuf.Config) *SimpleRunner {
                 }
         }
 
-        return &SimpleRunner{conf: conf, client: client, startTime: time.Now()}
+        return &SimpleRunner{conf: conf, client: client, startTime: time.Now(), sinkCounters: make(map[string]int64)}
 }
 
 const defaultWordlistURL = "https://raw.githubusercontent.com/xhackingz/apifuzz/refs/heads/master/wordlists/ultimate_fuzz_master.txt"
@@ -309,13 +315,52 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                                                 }
                                         }
 
-                                        // Baseline check: suppress results whose response fingerprint
-                                        // matches the base URL. This catches SPA/catch-all servers
-                                        // that return HTTP 200 with the same HTML for every path.
+                                        // ── Multi-category false positive validation pipeline ────────────
+                                        //
+                                        // Cat 2 / 3 / 6 — Base URL baseline (SPA, catch-all, soft-redirect,
+                                        //                  near-duplicate bodies, landing pages)
                                         if b, ok := perDomainBaselines[job.URLTemplate]; ok {
                                                 if matchesBaseline(&res, b) {
                                                         if r.conf.Verbose {
-                                                                out.PrintResult(res, "filtered: matches base URL baseline (soft-404 / SPA fallback suppression)")
+                                                                out.PrintResult(res, "filtered: matches base URL baseline (SPA / soft-redirect / near-duplicate)")
+                                                        }
+                                                        continue
+                                                }
+                                        }
+
+                                        // Cat 1 — Soft 404: HTTP 200 with error message in body
+                                        if res.HasSoftError {
+                                                if r.conf.Verbose {
+                                                        out.PrintResult(res, "filtered: soft-404 phrase detected in response body")
+                                                }
+                                                continue
+                                        }
+
+                                        // Cat 3 (extra) — JavaScript / meta soft redirect in body
+                                        if res.HasSoftRedir {
+                                                if r.conf.Verbose {
+                                                        out.PrintResult(res, "filtered: JavaScript/meta soft-redirect detected in response body")
+                                                }
+                                                continue
+                                        }
+
+                                        // Cat 4 — CDN / proxy cache HIT (normalised cached response)
+                                        if res.IsCDNHit {
+                                                if r.conf.Verbose {
+                                                        out.PrintResult(res, "filtered: CDN/proxy cache HIT response")
+                                                }
+                                                continue
+                                        }
+
+                                        // Cat 5 — Redirect sink: same Location seen for too many results
+                                        if loc := res.RedirectLocation; loc != "" {
+                                                r.sinkMu.Lock()
+                                                r.sinkCounters[loc]++
+                                                sinkCount := r.sinkCounters[loc]
+                                                r.sinkMu.Unlock()
+                                                if sinkCount > 10 {
+                                                        if r.conf.Verbose {
+                                                                out.PrintResult(res, fmt.Sprintf("filtered: redirect sink (%d results share Location: %s)", sinkCount, loc))
                                                         }
                                                         continue
                                                 }
@@ -511,6 +556,33 @@ func (r *SimpleRunner) doRequest(payload, urlTemplate string) ffuf.Result {
                 }
         }
 
+        // ── False positive validation fields ──────────────────────────────────
+        // These are computed for every response and consumed by the validation
+        // pipeline in Run().  They do not appear in any user-visible output.
+        contentType := strings.Split(resp.Header.Get("Content-Type"), ";")[0]
+        isHTML := strings.Contains(contentType, "text/html")
+
+        var (
+                title        string
+                simhash      uint64
+                hasSoftError bool
+                hasSoftRedir bool
+        )
+        if isHTML && len(body) > 0 {
+                // Limit the slice used for analysis to 64 KB to cap CPU cost.
+                analysisBuf := body
+                if len(analysisBuf) > 64*1024 {
+                        analysisBuf = analysisBuf[:64*1024]
+                }
+                title = extractTitle(analysisBuf)
+                simhash = computeSimHash(analysisBuf)
+                hasSoftError = hasSoftErrorPhrase(analysisBuf)
+                hasSoftRedir = hasSoftRedirect(analysisBuf)
+        }
+
+        // Category 4: CDN / proxy cache hit detection from response headers.
+        cdnHit := isCDNHit(resp.Header)
+
         if r.conf.Debug {
                 fmt.Fprintf(os.Stderr, "[DEBUG] <-- %d | size=%d | words=%d | lines=%d | time=%dms\n",
                         resp.StatusCode, len(body), words, lines, duration.Milliseconds())
@@ -532,12 +604,17 @@ func (r *SimpleRunner) doRequest(payload, urlTemplate string) ffuf.Result {
                 ContentLength:    int64(len(body)),
                 ContentWords:     int64(words),
                 ContentLines:     int64(lines),
-                ContentType:      strings.Split(resp.Header.Get("Content-Type"), ";")[0],
+                ContentType:      contentType,
                 RedirectLocation: redirect,
                 Url:              targetURL,
                 Duration:         duration,
                 Host:             req.URL.Host,
                 RetryAfter:       retryAfter,
+                SimHash:          simhash,
+                Title:            title,
+                HasSoftError:     hasSoftError,
+                HasSoftRedir:     hasSoftRedir,
+                IsCDNHit:         cdnHit,
         }
 }
 
@@ -708,34 +785,37 @@ func (r *SimpleRunner) autoCalibrateAll(targets []string, out ffuf.OutputProvide
 }
 
 // probeBaseline sends a GET request to the base URL (FUZZ replaced with an
-// empty string) and returns its response fingerprint. Returns nil if the
-// request fails, times out, or returns a non-200 status code — in those cases
-// no baseline filter is applied for this target.
+// empty string) and returns its multi-dimensional response fingerprint.
+// Returns nil if the request fails, times out, or returns a non-200 status —
+// in those cases no baseline filter is applied for this target.
 func (r *SimpleRunner) probeBaseline(urlTemplate string) *baselineResult {
         res := r.doRequest("", urlTemplate)
         if res.StatusCode != 200 {
                 return nil
         }
         return &baselineResult{
-                size:  res.ContentLength,
-                words: res.ContentWords,
-                lines: res.ContentLines,
+                size:    res.ContentLength,
+                words:   res.ContentWords,
+                lines:   res.ContentLines,
+                simhash: res.SimHash,
+                title:   res.Title,
         }
 }
 
 // matchesBaseline returns true when a fuzz result looks identical or near-
-// identical to the base URL baseline, indicating a SPA catch-all or soft-
-// redirect server that returns the same HTML page for every path.
+// identical to the base URL baseline, indicating a SPA catch-all, soft-
+// redirect, landing page, or CDN-cached fallback.
 //
-// Matching criteria (any one is sufficient):
-//   - Exact size match
-//   - Within ±5% of baseline size (tolerates minor dynamic content like timestamps)
-//   - Same word count (fallback when size varies more than 5%)
-//   - Same line count (final fallback)
+// Matching criteria — any one is sufficient to classify as false positive:
+//   - Exact or ±5% size match (Categories 2, 3)
+//   - Same word count or line count (fallback for dynamic content size variance)
+//   - SimHash Hamming distance ≤ 5 bits (Category 6 near-duplicate detection)
+//   - Title tag exact match against the base URL (Category 3)
 func matchesBaseline(res *ffuf.Result, b *baselineResult) bool {
         if b == nil {
                 return false
         }
+        // Size proximity check (Categories 2 & 3)
         if b.size > 0 {
                 diff := res.ContentLength - b.size
                 if diff < 0 {
@@ -745,10 +825,189 @@ func matchesBaseline(res *ffuf.Result, b *baselineResult) bool {
                         return true
                 }
         }
+        // Word / line count fallback
         if b.words > 0 && res.ContentWords == b.words {
                 return true
         }
         if b.lines > 0 && res.ContentLines == b.lines {
+                return true
+        }
+        // SimHash near-duplicate check (Category 6)
+        // Hamming distance ≤ 5 bits out of 64 means >92% structural similarity.
+        if b.simhash != 0 && res.SimHash != 0 {
+                if hammingDistance(res.SimHash, b.simhash) <= 5 {
+                        return true
+                }
+        }
+        // Title tag match (Category 3 — soft redirects / landing pages)
+        if b.title != "" && res.Title != "" && b.title == res.Title {
+                return true
+        }
+        return false
+}
+
+// ── False positive detection helpers ─────────────────────────────────────────
+
+// stripHTMLTags removes all HTML/XML tags from body, returning plain text.
+// A space is emitted in place of each closing angle bracket so that adjacent
+// words from different elements are not merged into a single token.
+func stripHTMLTags(body []byte) []byte {
+        out := make([]byte, 0, len(body))
+        inTag := false
+        for _, b := range body {
+                switch {
+                case b == '<':
+                        inTag = true
+                case b == '>':
+                        inTag = false
+                        out = append(out, ' ')
+                case !inTag:
+                        out = append(out, b)
+                }
+        }
+        return out
+}
+
+// extractTitle returns the inner text of the first <title> element found in body.
+func extractTitle(body []byte) string {
+        lower := bytes.ToLower(body)
+        start := bytes.Index(lower, []byte("<title>"))
+        if start == -1 {
+                return ""
+        }
+        start += 7
+        end := bytes.Index(lower[start:], []byte("</title>"))
+        if end == -1 {
+                return ""
+        }
+        return strings.TrimSpace(string(body[start : start+end]))
+}
+
+// fnv64a returns the FNV-1a 64-bit hash of the given string.
+func fnv64a(s string) uint64 {
+        var h uint64 = 14695981039346656037
+        for i := 0; i < len(s); i++ {
+                h ^= uint64(s[i])
+                h *= 1099511628211
+        }
+        return h
+}
+
+// computeSimHash computes a 64-bit SimHash fingerprint of the response body.
+// HTML tags are stripped first so structural content (words) is compared,
+// not raw markup.  Short tokens (< 3 chars) are skipped as noise.
+func computeSimHash(body []byte) uint64 {
+        text := stripHTMLTags(body)
+        var v [64]int32
+        for _, word := range strings.Fields(strings.ToLower(string(text))) {
+                if len(word) < 3 {
+                        continue
+                }
+                h := fnv64a(word)
+                for i := 0; i < 64; i++ {
+                        if (h>>uint(i))&1 == 1 {
+                                v[i]++
+                        } else {
+                                v[i]--
+                        }
+                }
+        }
+        var fp uint64
+        for i := 0; i < 64; i++ {
+                if v[i] > 0 {
+                        fp |= 1 << uint(i)
+                }
+        }
+        return fp
+}
+
+// hammingDistance returns the number of differing bits between two uint64 values.
+func hammingDistance(a, b uint64) int {
+        x := a ^ b
+        n := 0
+        for x != 0 {
+                n += int(x & 1)
+                x >>= 1
+        }
+        return n
+}
+
+// hasSoftErrorPhrase returns true if the stripped body contains common phrases
+// that indicate a soft-404 response (HTTP 200 with an error message inside).
+// Only the first 64 KB of the body is inspected.
+func hasSoftErrorPhrase(body []byte) bool {
+        text := strings.ToLower(string(stripHTMLTags(body)))
+        phrases := []string{
+                "page not found",
+                "404 not found",
+                "error 404",
+                "does not exist",
+                "no longer available",
+                "resource not found",
+                "endpoint not found",
+                "route not found",
+                "path not found",
+                "the page you were looking for",
+                "the requested url was not found",
+                "could not be found",
+        }
+        for _, p := range phrases {
+                if strings.Contains(text, p) {
+                        return true
+                }
+        }
+        return false
+}
+
+// hasSoftRedirect returns true if the response body contains JavaScript-based
+// or meta-tag soft redirect signals — a 200 response that immediately navigates
+// the browser elsewhere without issuing a real HTTP redirect.
+func hasSoftRedirect(body []byte) bool {
+        lower := strings.ToLower(string(body))
+        patterns := []string{
+                "window.location",
+                "location.href",
+                "location.replace(",
+                "location.assign(",
+                `<meta http-equiv="refresh"`,
+                `<meta http-equiv='refresh'`,
+        }
+        for _, p := range patterns {
+                if strings.Contains(lower, p) {
+                        return true
+                }
+        }
+        return false
+}
+
+// isCDNHit returns true if the response headers indicate a CDN or reverse-proxy
+// cache HIT.  Cache-normalised responses return the same stored object for every
+// path, making them a source of false positives.
+func isCDNHit(header http.Header) bool {
+        xCache := strings.ToLower(header.Get("X-Cache"))
+        cfCache := strings.ToLower(header.Get("CF-Cache-Status"))
+        xProxy := strings.ToLower(header.Get("X-Proxy-Cache"))
+        fastly := strings.ToLower(header.Get("X-Served-By"))
+
+        if strings.Contains(xCache, "hit") {
+                return true
+        }
+        if cfCache == "hit" {
+                return true
+        }
+        if strings.Contains(xProxy, "hit") {
+                return true
+        }
+        // Fastly and similar CDNs set X-Served-By to an edge-node name when serving
+        // from cache — combined with a non-zero Age header this is a reliable signal.
+        if fastly != "" {
+                age := strings.TrimSpace(header.Get("Age"))
+                if age != "" && age != "0" {
+                        return true
+                }
+        }
+        // Generic: non-zero Age header indicates a shared cache hit on any proxy.
+        if age := strings.TrimSpace(header.Get("Age")); age != "" && age != "0" {
                 return true
         }
         return false
