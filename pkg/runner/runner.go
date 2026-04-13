@@ -476,6 +476,10 @@ func (r *SimpleRunner) nextUserAgent() string {
 
 // doRequest performs one HTTP request, substituting payload into urlTemplate at the FUZZ keyword.
 func (r *SimpleRunner) doRequest(payload, urlTemplate string) ffuf.Result {
+        return r.doRequestWithClient(payload, urlTemplate, r.client)
+}
+
+func (r *SimpleRunner) doRequestWithClient(payload, urlTemplate string, client *http.Client) ffuf.Result {
         var encodedPayload string
         if r.conf.Raw {
                 encodedPayload = payload
@@ -539,7 +543,7 @@ func (r *SimpleRunner) doRequest(payload, urlTemplate string) ffuf.Result {
         }
 
         start := time.Now()
-        resp, err := r.client.Do(req)
+        resp, err := client.Do(req)
         duration := time.Since(start)
 
         if err != nil {
@@ -829,11 +833,13 @@ func (r *SimpleRunner) probeBaseline(urlTemplate string) *baselineResult {
                 title              string
         }
 
+        baselineClient := *r.client
+        baselineClient.CheckRedirect = nil
+
         snaps := make([]snap, 0, numProbes)
         for i := 0; i < numProbes; i++ {
-                res := r.doRequest(randomString(24), urlTemplate)
-                // Skip network errors and auth-blocked responses.
-                if res.StatusCode == 0 || res.StatusCode == 401 || res.StatusCode == 403 {
+                res := r.doRequestWithClient(randomString(24), urlTemplate, &baselineClient)
+                if res.StatusCode == 0 {
                         continue
                 }
                 snaps = append(snaps, snap{
@@ -845,12 +851,15 @@ func (r *SimpleRunner) probeBaseline(urlTemplate string) *baselineResult {
                 })
         }
 
-        if len(snaps) < 2 {
-                // Not enough data to establish a reliable baseline.
+        if len(snaps) == 0 {
                 return nil
         }
 
         first := snaps[0]
+
+        if len(snaps) == 1 {
+                return &baselineResult{size: first.size, words: first.words, lines: first.lines, simhash: first.simhash, title: first.title}
+        }
 
         // Consistent byte size — strongest signal, use it directly.
         allSameSize := true
@@ -900,7 +909,7 @@ func (r *SimpleRunner) probeBaseline(urlTemplate string) *baselineResult {
                 return &baselineResult{size: first.size, words: first.words, lines: first.lines, simhash: first.simhash, title: first.title}
         }
 
-        return nil
+        return &baselineResult{size: first.size, words: first.words, lines: first.lines, simhash: first.simhash, title: first.title}
 }
 
 // matchesBaseline returns true when a fuzz result looks identical or near-
