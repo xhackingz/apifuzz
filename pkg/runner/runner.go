@@ -236,6 +236,8 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
         var foundCount int64
         var doneCount int64
         var errorCount int64
+        var lastFoundURL string
+        var lastFoundMu sync.Mutex
 
         ctx := r.conf.Context
         if r.conf.MaxTime > 0 {
@@ -281,8 +283,16 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                                                 rps = float64(cur) / elapsed
                                         }
                                         if r.conf.OutputMode == "live" {
-                                                fmt.Fprintf(os.Stderr, "\r\033[2K%c fuzzing... | req/s: %.0f | hits: %d | catch-all: %d | seen suppressed: %d",
-                                                        spinner[spin%len(spinner)], rps, found, catchAll, catchAllSeen)
+                                                lastFoundMu.Lock()
+                                                lf := lastFoundURL
+                                                lastFoundMu.Unlock()
+                                                if lf != "" {
+                                                        fmt.Fprintf(os.Stderr, "\r\033[2K%c fuzzing | req/s: %.0f | found: %d | catch-all: %d | suppressed: %d | errors: %d | last: %s",
+                                                                spinner[spin%len(spinner)], rps, found, catchAll, catchAllSeen, errs, lf)
+                                                } else {
+                                                        fmt.Fprintf(os.Stderr, "\r\033[2K%c fuzzing | req/s: %.0f | found: %d | catch-all: %d | suppressed: %d | errors: %d",
+                                                                spinner[spin%len(spinner)], rps, found, catchAll, catchAllSeen, errs)
+                                                }
                                                 spin++
                                                 continue
                                         }
@@ -338,6 +348,14 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
 
                                         if res.StatusCode == 0 {
                                                 atomic.AddInt64(&errorCount, 1)
+                                                if r.conf.OutputMode == "normal" && !r.conf.Quiet && !r.conf.Json {
+                                                        host := catchAllHost(res)
+                                                        errMsg := res.ErrorMsg
+                                                        if errMsg == "" {
+                                                                errMsg = "request failed"
+                                                        }
+                                                        out.Error(fmt.Sprintf("%s — %s", host, errMsg))
+                                                }
                                                 if r.conf.StopOnErrors || r.conf.StopOnAll {
                                                         r.conf.Cancel()
                                                         return
@@ -424,6 +442,9 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                                         show, reason := filter.ShouldShow(r.conf, &res)
                                         if show {
                                                 atomic.AddInt64(&foundCount, 1)
+                                                lastFoundMu.Lock()
+                                                lastFoundURL = res.Url
+                                                lastFoundMu.Unlock()
                                                 out.Result(res)
                                         } else if r.conf.Verbose {
                                                 out.PrintResult(res, reason)
@@ -610,7 +631,17 @@ func (r *SimpleRunner) doRequestWithClient(payload, urlTemplate string, client *
                 if r.conf.Debug {
                         fmt.Fprintf(os.Stderr, "[DEBUG] <-- ERROR: %v\n", err)
                 }
-                return ffuf.Result{Url: targetURL, Input: map[string][]byte{"FUZZ": []byte(payload)}}
+                errMsg := err.Error()
+                if strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "deadline exceeded") {
+                        errMsg = fmt.Sprintf("timeout (%ds)", r.conf.Timeout)
+                } else if strings.Contains(errMsg, "connection refused") {
+                        errMsg = "connection refused"
+                } else if strings.Contains(errMsg, "no such host") {
+                        errMsg = "no such host"
+                } else {
+                        errMsg = "request failed"
+                }
+                return ffuf.Result{Url: targetURL, Input: map[string][]byte{"FUZZ": []byte(payload)}, ErrorMsg: errMsg}
         }
         defer resp.Body.Close()
 

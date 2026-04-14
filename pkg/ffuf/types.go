@@ -32,6 +32,7 @@ type Result struct {
         HasSoftError   bool   `json:"-"`
         HasSoftRedir   bool   `json:"-"`
         IsCDNHit       bool   `json:"-"`
+        ErrorMsg       string `json:"-"`
 }
 
 type FilterProvider interface {
