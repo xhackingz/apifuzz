@@ -70,6 +70,17 @@ Multiple targets:
 ./apifuzz -u https://example.com/FUZZ -t 5 -p 1.0-2.0 -x http://127.0.0.1:8080
 ```
 
+## Update
+
+If a new version is pushed to GitHub, pull and rebuild from inside the `apifuzz` folder:
+
+```bash
+cd apifuzz
+git pull origin master
+go build -buildvcs=false -o apifuzz .
+./apifuzz -V
+```
+
 ## Author
 
 **xhacking_z** — [x.com/xhacking_z](https://x.com/xhacking_z)
