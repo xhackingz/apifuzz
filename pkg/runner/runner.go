@@ -222,6 +222,14 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
         var doneCount int64
         var errorCount int64
 
+        // Runtime adaptive catch-all detector.
+        // If the same (domain, response-size) pair produces more than
+        // runtimeCatchAllThreshold results the domain is almost certainly
+        // serving a uniform catch-all response that probing missed.
+        // We suppress every result beyond the threshold and emit one notice.
+        const runtimeCatchAllThreshold = 5
+        var runtimeSizeCounts sync.Map // key "urlTemplate\x00size" → *int64
+
         ctx := r.conf.Context
         if r.conf.MaxTime > 0 {
                 var cancel context.CancelFunc
@@ -349,6 +357,25 @@ func (r *SimpleRunner) Run(out ffuf.OutputProvider) error {
                                                 if matchesBaseline(&res, b) {
                                                         if r.conf.Verbose {
                                                                 out.PrintResult(res, "filtered: matches calibrated baseline")
+                                                        }
+                                                        continue
+                                                }
+                                        }
+
+                                        // Runtime catch-all guard: track (domain, size) hit counts.
+                                        // If the same size appears more than runtimeCatchAllThreshold
+                                        // times from the same domain, the domain is serving a uniform
+                                        // catch-all that probing missed — suppress from here on.
+                                        {
+                                                rKey := fmt.Sprintf("%s\x00%d", job.URLTemplate, res.ContentLength)
+                                                val, _ := runtimeSizeCounts.LoadOrStore(rKey, new(int64))
+                                                n := atomic.AddInt64(val.(*int64), 1)
+                                                if n == int64(runtimeCatchAllThreshold+1) && !r.conf.Quiet {
+                                                        out.Warning(fmt.Sprintf("[CATCH-ALL] %s — same response size (%d B) seen %d times, suppressing further identical results.", job.URLTemplate, res.ContentLength, runtimeCatchAllThreshold))
+                                                }
+                                                if n > int64(runtimeCatchAllThreshold) {
+                                                        if r.conf.Verbose {
+                                                                out.PrintResult(res, fmt.Sprintf("filtered: runtime catch-all (size %d B seen %d+ times on domain)", res.ContentLength, runtimeCatchAllThreshold))
                                                         }
                                                         continue
                                                 }
@@ -862,12 +889,14 @@ func (r *SimpleRunner) probeBaseline(urlTemplate string) *baselineResult {
                 title              string
         }
 
-        baselineClient := *r.client
-        baselineClient.CheckRedirect = nil
-
+        // Use the SAME client settings as the actual fuzzer (same redirect policy,
+        // same TLS config, same timeout) so the probe sees the exact same responses
+        // the fuzzer will see.  A separate client copy was previously used with
+        // redirect-following enabled, which caused probes to follow 302→external-page
+        // while the fuzzer saw the 302 directly — making baselines unreliable.
         snaps := make([]snap, 0, numProbes)
         for i := 0; i < numProbes; i++ {
-                res := r.doRequestWithClient(randomString(24), urlTemplate, &baselineClient)
+                res := r.doRequest(randomString(24), urlTemplate)
                 if res.StatusCode == 0 {
                         continue
                 }
