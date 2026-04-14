@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const Version = "2.4.2"
+const Version = "2.4.3"
 
 const DefaultWordlistURL = "https://raw.githubusercontent.com/xhackingz/apifuzz/refs/heads/master/wordlists/ultimate_fuzz_master.txt"
 
@@ -47,6 +47,8 @@ type OutputProvider interface {
 	Finalize() error
 	Result(r Result)
 	PrintResult(r Result, reason string)
+	CatchAll(r Result, seen int64)
+	Progress(done, total, hits, errors int64, rps float64)
 	Info(s string)
 	Error(s string)
 	Warning(s string)

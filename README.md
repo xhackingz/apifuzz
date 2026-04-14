@@ -236,8 +236,9 @@ This means every domain receives traffic simultaneously — increasing `-t` spee
 | `-mt` | Match response time (ms; supports lists and ranges) |
 | `-ft` | Filter response time (ms) |
 | `-e` | Extensions to append, e.g. `.php,.html` |
-| `-o` | Output file path |
+| `-o` | Output file path, or terminal output mode: `normal`, `live`, `silent` |
 | `-of` | Output format: `json` (default), `csv`, `md` |
+| `-om`, `-output-mode` | Terminal output mode: `normal`, `live`, `silent` |
 | `-c` | Colored output |
 | `-v` | Verbose — show filtered results with suppression reason |
 | `-s` | Silent mode — results only |
@@ -282,6 +283,14 @@ The built-in false positive engine (always-on) is complemented by optional auto-
 ---
 
 ## Output format
+
+Terminal output modes:
+
+- `normal` (default): clean table output plus compact catch-all summaries such as `[CATCH-ALL] cs-agent.ai.dyson.com (405 B, seen 5x)`.
+- `live`: one updating status line, for example `⠋ fuzzing... | req/s: 1200 | hits: 34 | catch-all: 2 | seen suppressed: 5`.
+- `silent`: suppress terminal logs while still processing results and writing output files when configured.
+
+For compatibility, `-o results.json` still writes to a file. If `-o` is set to `normal`, `live`, or `silent`, it is treated as the terminal output mode. Use `-om` or `-output-mode` when you want to set the mode explicitly while also writing to a file.
 
 Each match prints the full resolved URL:
 
